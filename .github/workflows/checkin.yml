@@ -56,11 +56,11 @@ jobs:
         env:
           ACCOUNTS: ${{ secrets.ACCOUNTS }}
 
-      - name: Upload result artifact
-        if: always()
+      - name: Upload result artifact (仅失败时)
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: checkin-result
+          name: checkin-result-${{ github.run_id }}
           path: checkin_result.json
 
       - name: Post summary to issue
