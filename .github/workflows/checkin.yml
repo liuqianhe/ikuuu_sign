@@ -41,10 +41,9 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Install Playwright
-        uses: microsoft/playwright-github-action@v1
-        with:
-          version: "1.48.0"
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install --with-deps chromium
 
       - name: Random jitter 0-5s
         run: sleep $(( RANDOM % 6 ))
