@@ -2,7 +2,7 @@ name: iKuuu Checkin
 
 on:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "28 16 * * *"
   workflow_dispatch:
 
 env:
@@ -45,6 +45,9 @@ jobs:
         uses: microsoft/playwright-github-action@v1
         with:
           version: "1.48.0"
+
+      - name: Random jitter 0-5s
+        run: sleep $(( RANDOM % 6 ))
 
       - name: Run checkin
         run: python playwright_checkin.py
