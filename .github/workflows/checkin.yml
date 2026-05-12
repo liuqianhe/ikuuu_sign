@@ -19,13 +19,26 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
       - name: Install Python dependencies
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
-      - name: Install Playwright browsers
+      - name: Verify installation
         run: |
-          python -m playwright install --with-deps chromium
+          pip list | grep playwright
+          python -c "import playwright; print('playwright OK')"
+          python -c "from playwright.sync_api import sync_playwright; print('sync_api OK')"
+
+      - name: Install Playwright dependencies and browsers
+        run: |
+          npx playwright install --with-deps chromium
 
       - name: Run checkin
         run: python playwright_checkin.py

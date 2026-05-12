@@ -13,8 +13,9 @@ from bs4 import BeautifulSoup
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
-except ImportError:
-    print("❌ 请先安装 playwright: pip install playwright && playwright install chromium")
+except ImportError as e:
+    print(f"❌ Playwright 导入失败: {e}")
+    print("请运行: pip install playwright==1.48.0")
     sys.exit(1)
 
 import urllib.parse
