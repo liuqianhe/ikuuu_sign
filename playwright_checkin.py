@@ -27,8 +27,8 @@ COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ikuuu_co
 COOKIE_MAX_AGE_DAYS = 7
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-ikun_host = "ikuuu.fyi"
-backup_hosts = ["ikuuu.win", "ikuuu.one", "ikuuu.nl"]
+DOMAINS = ["ikuuu.fyi", "ikuuu.win", "ikuuu.org"]
+RESULT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkin_result.json")
 
 # ─────────────── Cookie 存储（复用原逻辑） ───────────────
 def get_cookie_key(email, base_url):
@@ -130,8 +130,8 @@ def validate_cookie(session, base_url):
         return False
 
 # ─────────────── 获取剩余流量（复用原逻辑） ───────────────
-def get_remaining_flow(cookies):
-    user_url = f'https://{ikun_host}/user'
+def get_remaining_flow(cookies, base_url=None):
+    user_url = f'{base_url or "https://ikuuu.fyi"}/user'
     try:
         user_page = requests.get(user_url, cookies=cookies, headers={"User-Agent": USER_AGENT}, timeout=20)
         if user_page.status_code != 200:
@@ -204,145 +204,77 @@ def human_click(page, element):
     page.mouse.click(target_x, target_y)
 
 
-# ─────────────── Playwright 登录取 Cookie ───────────────
-def playwright_login_and_get_cookies(email, password, base_url, headless=True, timeout_ms=60000):
+# ─────────────── Playwright 登录（context 级别）───────────────
+def login_in_context(context, email, password, base_url, timeout_ms=60000):
     """
-    用 Playwright 浏览器打开登录页 → 填表 → 点登录 → 等跳转 → 取 Cookie
-    返回 (cookies_list, error_message)
+    在已有 context 中完成登录流程，返回 cookies 或 None
     """
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=headless,
-            args=[
-                "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
-            ],
-        )
-        context = browser.new_context(
-            user_agent=USER_AGENT,
-            viewport={"width": 1280, "height": 800},
-            locale="zh-CN",
-        )
+    page = context.new_page()
+    login_url = f"{base_url}/auth/login"
 
-        # 反检测：抹除 webdriver 特征
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-        """)
+    try:
+        print(f"  🌐 打开登录页: {login_url}")
+        page.goto(login_url, wait_until="networkidle", timeout=timeout_ms)
+        print(f"  ✅ 页面加载完成: {page.title()}")
 
-        page = context.new_page()
-        login_url = f"{base_url}/auth/login"
+        page.wait_for_selector('#email', timeout=10000)
+        print(f"  📝 填写账号密码...")
+
+        page.fill('#email', email)
+        page.fill('#password', password)
+
+        page.wait_for_selector('.embed-captcha', timeout=10000)
 
         try:
-            print(f"  🌐 正在打开登录页: {login_url}")
-            page.goto(login_url, wait_until="networkidle", timeout=timeout_ms)
-            print(f"  ✅ 页面加载完成，标题: {page.title()}")
+            page.click('.geetest_btn_click', timeout=5000)
+            print(f"  ✅ 已点击验证按钮")
+        except:
+            print(f"  ℹ️ 未找到验证按钮，可能无需点击")
 
-            # 等待表单可见
-            page.wait_for_selector('#email', timeout=10000)
-            print(f"  📝 填写账号密码...")
+        page.wait_for_function(
+            "() => window.Captcha && window.Captcha.isReady()",
+            timeout=20000
+        )
 
-            page.fill('#email', email)
-            page.fill('#password', password)
+        login_btn = page.query_selector('button[type="submit"]')
+        if not login_btn:
+            return None, "未找到登录按钮"
 
-            # 等待并完成极验验证码
-            page.wait_for_selector('.embed-captcha', timeout=10000)
+        print(f"  🖱️ 模拟真人移动并点击登录...")
+        human_click(page, login_btn)
 
-            try:
-                page.click('.geetest_btn_click', timeout=5000)
-                print(f"  ✅ 已点击验证按钮")
-            except:
-                print(f"  ℹ️ 未找到验证按钮，可能无需点击")
-
-            page.wait_for_function(
-                "() => window.Captcha && window.Captcha.isReady()",
-                timeout=30000
+        try:
+            page.wait_for_url(
+                lambda url: "/user" in url or "/dashboard" in url or "checkin" in url,
+                timeout=15000,
             )
+            print(f"  ✅ 检测到跳转: {page.url}")
+        except PwTimeout:
+            current_url = page.url
+            content = page.content()
+            if "/auth/login" not in current_url or "签到" in content or "剩余流量" in content:
+                print(f"  ⚠️ 未检测到跳转，但页面内容可能已成功: {current_url}")
+            else:
+                return None, "登录后未检测到期望的页面跳转"
 
-            # 点击登录按钮
-            login_btn = page.query_selector('button[type="submit"]')
-            if not login_btn:
-                return None, "未找到登录按钮"
+        page.wait_for_timeout(2000)
 
-            print(f"  🖱️ 模拟真人移动并点击登录...")
-            human_click(page, login_btn)
+        pw_cookies = context.cookies()
+        if not pw_cookies:
+            return None, "未获取到 Cookie"
 
-            # 等待跳转 —— 登录成功后应跳到 /user 或包含 dashboard 的页面
-            try:
-                page.wait_for_url(
-                    lambda url: "/user" in url or "/dashboard" in url or "checkin" in url,
-                    timeout=30000,
-                )
-                print(f"  ✅ 检测到跳转: {page.url}")
-            except PwTimeout:
-                # 如果没有跳转，检查当前页面是否有成功标志
-                current_url = page.url
-                content = page.content()
-                if "/auth/login" not in current_url or "签到" in content or "剩余流量" in content:
-                    print(f"  ⚠️ 未检测到跳转，但页面内容可能已成功: {current_url}")
-                else:
-                    return None, "登录后未检测到期望的页面跳转"
+        print(f"  🍪 获取到 {len(pw_cookies)} 个 Cookie 条目")
+        return pw_cookies, None
 
-            # 等页面稳定
-            page.wait_for_timeout(2000)
+    except PwTimeout as e:
+        return None, f"操作超时: {e}"
+    except Exception as e:
+        return None, f"异常: {e}"
+    finally:
+        page.close()
 
-            # 提取 Cookie
-            pw_cookies = context.cookies()
-            if not pw_cookies:
-                return None, "未获取到 Cookie"
-
-            print(f"  🍪 获取到 {len(pw_cookies)} 个 Cookie 条目")
-            return pw_cookies, None
-
-        except PwTimeout as e:
-            return None, f"操作超时: {e}"
-        except Exception as e:
-            return None, f"异常: {e}"
-        finally:
-            browser.close()
 
 # ─────────────── 主流程 ───────────────
-def process_account(email, password, headless=True):
-    base_url = f"https://{ikun_host}"
-
-    # 1. 尝试已有 cookie
-    cached = load_session_cookie(email, base_url)
-    if cached:
-        sess = requests.session()
-        sess.cookies = requests.utils.cookiejar_from_dict(cached)
-        if validate_cookie(sess, base_url):
-            print(f"  🍪 本地 Cookie 有效，直接签到")
-            flow_val, flow_unit = get_remaining_flow(cached)
-            ok, msg = do_checkin(sess, base_url)
-            return ok, f"{msg} | Playwright Cookie", flow_val, flow_unit
-        else:
-            print(f"  ⚠️ Cookie 已失效")
-            clear_session_cookie(email, base_url)
-
-    # 2. Playwright 浏览器登录取 Cookie
-    print(f"  🎭 启动 Playwright 浏览器登录...")
-    pw_cookies, err = playwright_login_and_get_cookies(email, password, base_url, headless=headless)
-    if err or not pw_cookies:
-        return False, f"Playwright 登录失败: {err}", "-", "-"
-
-    save_session_cookie(email, base_url, pw_cookies)
-    print(f"  💾 Cookie 已保存")
-
-    # 3. 用拿到的 Cookie 签到
-    cookie_dict = {}
-    for c in pw_cookies:
-        if c.get("name") and c.get("value") is not None:
-            cookie_dict[c["name"]] = c["value"]
-
-    flow_val, flow_unit = get_remaining_flow(cookie_dict)
-
-    sess = requests.session()
-    sess.cookies = requests.utils.cookiejar_from_dict(cookie_dict)
-    ok, msg = do_checkin(sess, base_url)
-
-    return ok, msg, flow_val, flow_unit
-
-
 if __name__ == "__main__":
     print("🚀 iKuuu Playwright 签到脚本启动")
     print("=" * 50)
@@ -355,18 +287,102 @@ if __name__ == "__main__":
         sys.exit(1)
 
     results = []
+
+    # 第一轮：所有账号先试本地 cookie（取第一个域名试）
+    need_login = []
     for idx, (email, pwd) in enumerate(accounts, 1):
         print(f"\n👤 [{idx}/{len(accounts)}] {email}")
-        ok, msg, flow_val, flow_unit = process_account(email, pwd, headless=headless)
-        results.append({"email": email, "success": ok, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit})
-        icon = "✅" if ok else "❌"
-        print(f"  {icon} {msg}")
-        print(f"  📊 剩余流量: {flow_val} {flow_unit}")
+        ok = False
+        for domain in DOMAINS:
+            base_url = f"https://{domain}"
+            cached = load_session_cookie(email, base_url)
+            if not cached:
+                continue
+            sess = requests.session()
+            sess.cookies = requests.utils.cookiejar_from_dict(cached)
+            if validate_cookie(sess, base_url):
+                print(f"  🍪 [{domain}] Cookie 有效，直接签到")
+                flow_val, flow_unit = get_remaining_flow(cached, base_url)
+                ok_s, msg = do_checkin(sess, base_url)
+                results.append({"email": email, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain})
+                icon = "✅" if ok_s else "❌"
+                print(f"  {icon} {msg}")
+                print(f"  📊 剩余流量: {flow_val} {flow_unit}")
+                ok = True
+                break
+            else:
+                print(f"  ⚠️ [{domain}] Cookie 已失效")
+                clear_session_cookie(email, base_url)
+        if not ok:
+            need_login.append((idx, email, pwd))
 
+    # 第二轮：需要登录的，遍历域名重试
+    if need_login:
+        print(f"\n🎭 启动浏览器，处理 {len(need_login)} 个需要登录的账号...")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=headless,
+                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+            )
+            for idx, email, pwd in need_login:
+                print(f"\n👤 [{idx}/{len(accounts)}] {email}")
+                done = False
+                for domain in DOMAINS:
+                    base_url = f"https://{domain}"
+                    print(f"  尝试域名: {domain}")
+                    context = browser.new_context(
+                        user_agent=USER_AGENT,
+                        viewport={"width": 1280, "height": 800},
+                        locale="zh-CN",
+                    )
+                    context.add_init_script("""
+                        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+                    """)
+
+                    pw_cookies, err = login_in_context(context, email, pwd, base_url)
+                    if err or not pw_cookies:
+                        print(f"  ⚠️ [{domain}] 登录失败: {err}")
+                        context.close()
+                        continue
+
+                    save_session_cookie(email, base_url, pw_cookies)
+                    print(f"  💾 Cookie 已保存")
+
+                    cookie_dict = {c["name"]: c["value"] for c in pw_cookies if c.get("name") and c.get("value") is not None}
+                    flow_val, flow_unit = get_remaining_flow(cookie_dict, base_url)
+                    sess = requests.session()
+                    sess.cookies = requests.utils.cookiejar_from_dict(cookie_dict)
+                    ok_s, msg = do_checkin(sess, base_url)
+
+                    results.append({"email": email, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain})
+                    icon = "✅" if ok_s else "❌"
+                    print(f"  {icon} {msg}")
+                    print(f"  📊 剩余流量: {flow_val} {flow_unit}")
+
+                    context.close()
+                    done = True
+                    break
+
+                if not done:
+                    results.append({"email": email, "success": False, "message": f"所有域名登录失败", "flow_value": "-", "flow_unit": "-", "domain": "all"})
+
+            browser.close()
+
+    # 输出结果文件供 workflow 读取
+    summary_lines = []
     print("\n📊 汇总:")
     print("=" * 50)
     for r in results:
         icon = "✅" if r["success"] else "❌"
-        print(f"{icon} {r['email']} | {r['message']} | {r['flow_value']} {r['flow_unit']}")
+        line = f"{icon} {r['email']} | {r['message']} | {r['flow_value']} {r['flow_unit']}"
+        print(line)
+        summary_lines.append(line)
     print("=" * 50)
     print("🏁 执行完成")
+
+    try:
+        with open(RESULT_FILE, "w", encoding="utf-8") as f:
+            json.dump({"results": results, "summary": "\n".join(summary_lines)}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass

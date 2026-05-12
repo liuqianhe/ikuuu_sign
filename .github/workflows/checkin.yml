@@ -7,6 +7,7 @@ on:
 
 env:
   ACCOUNTS: ${{ secrets.ACCOUNTS }}
+  ISSUE_NUMBER: 1
 
 jobs:
   checkin:
@@ -49,3 +50,42 @@ jobs:
         run: python playwright_checkin.py
         env:
           ACCOUNTS: ${{ secrets.ACCOUNTS }}
+
+      - name: Upload result artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkin-result
+          path: checkin_result.json
+
+      - name: Post summary to issue
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const resultPath = 'checkin_result.json';
+            if (!fs.existsSync(resultPath)) {
+              console.log('结果文件不存在，跳过');
+              return;
+            }
+            const data = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+            const body = [
+              '## iKuuu 签到结果',
+              `运行时间: ${new Date().toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'})}`,
+              '```',
+              data.summary,
+              '```'
+            ].join('\n');
+
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: parseInt(process.env.ISSUE_NUMBER),
+                body: body
+              });
+              console.log('评论已发布');
+            } catch (e) {
+              console.log(`评论失败（请确认 Issue #${process.env.ISSUE_NUMBER} 已创建）: ${e.message}`);
+            }
