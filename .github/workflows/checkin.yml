@@ -36,9 +36,9 @@ jobs:
           python -c "import playwright; print('playwright OK')"
           python -c "from playwright.sync_api import sync_playwright; print('sync_api OK')"
 
-      - name: Install Playwright dependencies and browsers
+      - name: Install Playwright browsers
         run: |
-          npx playwright install --with-deps chromium
+          npx playwright@1.48.0 install --with-deps chromium
 
       - name: Run checkin
         run: python playwright_checkin.py
