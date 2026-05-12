@@ -94,6 +94,14 @@ def clear_session_cookie(email, base_url):
         del store[key]
         save_cookie_store(store)
 
+# ─────────────── 邮箱脱敏 ───────────────
+def mask_email(email):
+    idx = email.find('@')
+    if idx <= 0:
+        return email
+    return email[0] + '***' + email[idx:]
+
+
 # ─────────────── 账号获取 ───────────────
 def get_accounts():
     accounts = []
@@ -291,7 +299,8 @@ if __name__ == "__main__":
     # 第一轮：所有账号先试本地 cookie（取第一个域名试）
     need_login = []
     for idx, (email, pwd) in enumerate(accounts, 1):
-        print(f"\n👤 [{idx}/{len(accounts)}] {email}")
+        masked = mask_email(email)
+        print(f"\n👤 [{idx}/{len(accounts)}] {masked}")
         ok = False
         for domain in DOMAINS:
             base_url = f"https://{domain}"
@@ -304,7 +313,7 @@ if __name__ == "__main__":
                 print(f"  🍪 [{domain}] Cookie 有效，直接签到")
                 flow_val, flow_unit = get_remaining_flow(cached, base_url)
                 ok_s, msg = do_checkin(sess, base_url)
-                results.append({"email": email, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain})
+                results.append({"email": masked, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain})
                 icon = "✅" if ok_s else "❌"
                 print(f"  {icon} {msg}")
                 print(f"  📊 剩余流量: {flow_val} {flow_unit}")
@@ -325,7 +334,8 @@ if __name__ == "__main__":
                 args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
             )
             for idx, email, pwd in need_login:
-                print(f"\n👤 [{idx}/{len(accounts)}] {email}")
+                masked = mask_email(email)
+                print(f"\n👤 [{idx}/{len(accounts)}] {masked}")
                 done = False
                 for domain in DOMAINS:
                     base_url = f"https://{domain}"
@@ -355,7 +365,7 @@ if __name__ == "__main__":
                     sess.cookies = requests.utils.cookiejar_from_dict(cookie_dict)
                     ok_s, msg = do_checkin(sess, base_url)
 
-                    results.append({"email": email, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain})
+                    results.append({"email": masked, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain})
                     icon = "✅" if ok_s else "❌"
                     print(f"  {icon} {msg}")
                     print(f"  📊 剩余流量: {flow_val} {flow_unit}")
@@ -365,11 +375,12 @@ if __name__ == "__main__":
                     break
 
                 if not done:
-                    results.append({"email": email, "success": False, "message": f"所有域名登录失败", "flow_value": "-", "flow_unit": "-", "domain": "all"})
+                    results.append({"email": masked, "success": False, "message": f"所有域名登录失败", "flow_value": "-", "flow_unit": "-", "domain": "all"})
 
             browser.close()
 
     # 输出结果文件供 workflow 读取
+    has_failure = any(not r["success"] for r in results)
     summary_lines = []
     print("\n📊 汇总:")
     print("=" * 50)
@@ -383,6 +394,6 @@ if __name__ == "__main__":
 
     try:
         with open(RESULT_FILE, "w", encoding="utf-8") as f:
-            json.dump({"results": results, "summary": "\n".join(summary_lines)}, f, ensure_ascii=False, indent=2)
+            json.dump({"results": results, "summary": "\n".join(summary_lines), "has_failure": has_failure}, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
