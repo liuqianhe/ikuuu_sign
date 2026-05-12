@@ -1,0 +1,32 @@
+name: iKuuu Checkin
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+env:
+  ACCOUNTS: ${{ secrets.ACCOUNTS }}
+
+jobs:
+  checkin:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          pip install beautifulsoup4 requests
+
+      - name: Install Playwright
+        uses: microsoft/playwright-github-action@v1
+        with:
+          version: "1.48.0"
+
+      - name: Run checkin
+        run: python playwright_checkin.py
