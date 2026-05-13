@@ -118,6 +118,7 @@ def get_accounts():
 
 # ─────────────── 验证 Cookie ───────────────
 def validate_cookie(session, base_url):
+    """返回: True=有效, False=过期, None=网络异常（保留cookie）"""
     try:
         resp = session.get(
             base_url + "/user",
@@ -132,8 +133,8 @@ def validate_cookie(session, base_url):
         if "var originBody" in resp.text or "剩余流量" in resp.text:
             return True
         return False
-    except Exception:
-        return False
+    except requests.exceptions.RequestException:
+        return None
 
 # ─────────────── 签到 ───────────────
 def do_checkin(session, base_url):
@@ -326,9 +327,9 @@ if __name__ == "__main__":
 
     results = []
 
-    # ── 第一轮：并行试 cookie ──
+    # ── 第一轮：并行试 cookie，网络异常保留cookie ──
     def cookie_checkin(email, password):
-        """返回 (email, result_dict_or_None, need_login_bool)"""
+        """返回 (email, result_dict_or_None, need_login)"""
         for domain in DOMAINS:
             base_url = f"https://{domain}"
             cached = load_session_cookie(email, base_url)
@@ -336,18 +337,34 @@ if __name__ == "__main__":
                 continue
             sess = requests.session()
             sess.cookies = requests.utils.cookiejar_from_dict(cached)
-            if validate_cookie(sess, base_url):
+            status = validate_cookie(sess, base_url)
+            if status is None:
+                tprint(f"  ⚠️ {mask_email(email)} [{domain}] 网络异常，保留 cookie 下次再试")
+                return email, None, True
+            if status is True:
                 ok_s, msg = do_checkin(sess, base_url)
                 masked = mask_email(email)
                 r = {"email": masked, "success": ok_s, "message": msg, "domain": domain}
                 tprint(f"  🍪 [{domain}] {masked} {'✅' if ok_s else '❌'} {msg}")
                 return email, r, False
+            # status is False → cookie 真正失效
+            tprint(f"  🗑️ [{domain}] {mask_email(email)} cookie 已过期，清理")
             clear_session_cookie(email, base_url)
+        return email, None, True
+
+    def cookie_checkin_with_retry(email, password, max_retries=2):
+        for attempt in range(max_retries):
+            ret_email, result, need_login = cookie_checkin(email, password)
+            if result or not need_login:
+                return ret_email, result, need_login
+            if attempt < max_retries - 1:
+                tprint(f"  🔄 {mask_email(email)} 第{attempt+1}次失败，{attempt+1}s后重试")
+                time.sleep(attempt + 1)
         return email, None, True
 
     need_login = []
     with ThreadPoolExecutor(max_workers=len(accounts)) as executor:
-        fut_map = {executor.submit(cookie_checkin, email, pwd): (idx, email, pwd) for idx, (email, pwd) in enumerate(accounts, 1)}
+        fut_map = {executor.submit(cookie_checkin_with_retry, email, pwd): (idx, email, pwd) for idx, (email, pwd) in enumerate(accounts, 1)}
         for fut in as_completed(fut_map, timeout=120):
             idx, email, pwd = fut_map[fut]
             try:
@@ -374,7 +391,7 @@ if __name__ == "__main__":
             for fut in as_completed(fut_map, timeout=120):
                 idx, email = fut_map[fut]
                 try:
-                    ret_email, pw_cookies, err, domain = fut.result(timeout=30)
+                    ret_email, pw_cookies, err, domain = fut.result(timeout=120)
                 except Exception as e:
                     ret_email, pw_cookies, err, domain = email, None, str(e), None
                 login_results[idx - 1] = (ret_email, pw_cookies, err, domain)
