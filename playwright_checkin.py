@@ -8,7 +8,6 @@ import sys
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from threading import Lock
-from filelock import FileLock
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
@@ -29,36 +28,36 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 DOMAINS = ["ikuuu.fyi", "ikuuu.win"]
 RESULT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkin_result.json")
 
-_cookie_store_lock = FileLock(COOKIE_FILE + ".lock")
+_cookie_store_lock = Lock()
+COOKIE_MAX_AGE_DAYS = 7
 
-# ─────────────── Cookie 存储（复用原逻辑） ───────────────
 def get_cookie_key(email, base_url):
     host = urlparse(base_url).netloc.lower()
     return f"{email}@@{host}"
 
-def load_cookie_store():
-    with _cookie_store_lock:
-        if not os.path.exists(COOKIE_FILE):
-            return {}
-        try:
-            with open(COOKIE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
+def _load_cookie_store_unlocked():
+    try:
+        with open(COOKIE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        tprint(f"  ⚠️ 加载cookie失败: {e}")
+        return {}
 
-def save_cookie_store(store):
-    with _cookie_store_lock:
-        try:
-            with open(COOKIE_FILE, "w", encoding="utf-8") as f:
-                json.dump(store, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            tprint(f"  ⚠️ 保存cookie失败: {e}")
+def _save_cookie_store_unlocked(store):
+    try:
+        temp_file = COOKIE_FILE + ".tmp"
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False, indent=2)
+        os.replace(temp_file, COOKIE_FILE)
+    except Exception as e:
+        tprint(f"  ⚠️ 保存cookie失败: {e}")
 
 def save_session_cookie(email, base_url, pw_cookies):
     with _cookie_store_lock:
+        store = _load_cookie_store_unlocked()
         key = get_cookie_key(email, base_url)
-        store = load_cookie_store()
         cookie_dict = {}
         for c in pw_cookies:
             if c.get("sameSite") == "None":
@@ -74,12 +73,12 @@ def save_session_cookie(email, base_url, pw_cookies):
             "cookies": cookie_dict,
             "source": "playwright",
         }
-        save_cookie_store(store)
+        _save_cookie_store_unlocked(store)
 
 def load_session_cookie(email, base_url):
     with _cookie_store_lock:
+        store = _load_cookie_store_unlocked()
         key = get_cookie_key(email, base_url)
-        store = load_cookie_store()
         item = store.get(key)
         if not item:
             return None
@@ -94,11 +93,11 @@ def load_session_cookie(email, base_url):
 
 def clear_session_cookie(email, base_url):
     with _cookie_store_lock:
+        store = _load_cookie_store_unlocked()
         key = get_cookie_key(email, base_url)
-        store = load_cookie_store()
         if key in store:
             del store[key]
-            save_cookie_store(store)
+            _save_cookie_store_unlocked(store)
 
 # ─────────────── 邮箱脱敏 ───────────────
 def mask_email(email):
