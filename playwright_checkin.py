@@ -447,13 +447,14 @@ if __name__ == "__main__":
                 continue
 
             if base_url:
-                save_session_cookie(email, base_url, pw_cookies)
-                print(f"  💾 {masked} Cookie 已保存 ({domain})")
-
                 cookie_dict = {c["name"]: c["value"] for c in pw_cookies if c.get("name") and c.get("value") is not None}
                 sess = requests.session()
                 sess.cookies = requests.utils.cookiejar_from_dict(cookie_dict)
                 ok_s, msg = do_checkin(sess, base_url)
+
+                if ok_s:
+                    save_session_cookie(email, base_url, pw_cookies)
+                    print(f"  💾 {masked} Cookie 已保存 ({domain})")
 
                 results.append({"email": masked, "success": ok_s, "message": msg, "domain": domain})
                 icon = "✅" if ok_s else "❌"
