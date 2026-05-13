@@ -6,7 +6,7 @@ import json
 import time
 import sys
 import random
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from threading import Lock
 
 try:
@@ -348,9 +348,14 @@ if __name__ == "__main__":
     need_login = []
     with ThreadPoolExecutor(max_workers=len(accounts)) as executor:
         fut_map = {executor.submit(cookie_checkin, email, pwd): (idx, email, pwd) for idx, (email, pwd) in enumerate(accounts, 1)}
-        for fut in as_completed(fut_map):
+        for fut in as_completed(fut_map, timeout=120):
             idx, email, pwd = fut_map[fut]
-            ret_email, result, should_login = fut.result()
+            try:
+                ret_email, result, should_login = fut.result(timeout=30)
+            except TimeoutError:
+                tprint(f"  ⚠️ {mask_email(email)} cookie 签到超时，转入浏览器登录")
+                result = None
+                should_login = True
             if result:
                 results.append(result)
             if should_login:
@@ -366,10 +371,10 @@ if __name__ == "__main__":
                 fut = executor.submit(login_account, email, pwd, DOMAINS, headless)
                 fut_map[fut] = (idx, email)
 
-            for fut in as_completed(fut_map):
+            for fut in as_completed(fut_map, timeout=120):
                 idx, email = fut_map[fut]
                 try:
-                    ret_email, pw_cookies, err, domain = fut.result()
+                    ret_email, pw_cookies, err, domain = fut.result(timeout=30)
                 except Exception as e:
                     ret_email, pw_cookies, err, domain = email, None, str(e), None
                 login_results[idx - 1] = (ret_email, pw_cookies, err, domain)
