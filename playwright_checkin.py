@@ -218,11 +218,17 @@ def login_in_context(context, email, password, base_url, timeout_ms=60000):
     在已有 context 中完成登录流程，返回 cookies 或 None
     """
     page = context.new_page()
+
+    # 拦截无用资源（图片/字体/媒体），不下载省时间
+    page.route("**/*", lambda route: route.abort()
+        if route.request.resource_type in ("image", "font", "media")
+        else route.continue_())
+
     login_url = f"{base_url}/auth/login"
 
     try:
         print(f"  🌐 打开登录页: {login_url}")
-        page.goto(login_url, wait_until="networkidle", timeout=timeout_ms)
+        page.goto(login_url, wait_until="domcontentloaded", timeout=timeout_ms)
         print(f"  ✅ 页面加载完成: {page.title()}")
 
         page.wait_for_selector('#email', timeout=10000)
@@ -264,8 +270,6 @@ def login_in_context(context, email, password, base_url, timeout_ms=60000):
                 print(f"  ⚠️ 未检测到跳转，但页面内容可能已成功: {current_url}")
             else:
                 return None, "登录后未检测到期望的页面跳转"
-
-        page.wait_for_timeout(2000)
 
         pw_cookies = context.cookies()
         if not pw_cookies:
@@ -331,7 +335,12 @@ if __name__ == "__main__":
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=headless,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                args=[
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                ],
             )
             for idx, email, pwd in need_login:
                 masked = mask_email(email)
