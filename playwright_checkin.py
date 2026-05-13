@@ -271,38 +271,44 @@ def login_account(email, password, domains, headless, timeout_ms=60000):
     """独立浏览器登录单个账号，返回 (email, cookies, err, domain)"""
     for domain in domains:
         base_url = f"https://{domain}"
+        masked = mask_email(email)
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=headless,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-gpu",
-                        "--disable-dev-shm-usage",
-                        "--disable-blink-features=AutomationControlled",
-                    ],
-                )
-                context = browser.new_context(
-                    user_agent=USER_AGENT,
-                    viewport={"width": 1280, "height": 800},
-                    locale="zh-CN",
-                )
-                context.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                    Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-                """)
+                browser = None
+                context = None
+                try:
+                    browser = p.chromium.launch(
+                        headless=headless,
+                        args=[
+                            "--no-sandbox",
+                            "--disable-gpu",
+                            "--disable-dev-shm-usage",
+                            "--disable-blink-features=AutomationControlled",
+                        ],
+                    )
+                    context = browser.new_context(
+                        user_agent=USER_AGENT,
+                        viewport={"width": 1280, "height": 800},
+                        locale="zh-CN",
+                    )
+                    context.add_init_script("""
+                        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+                    """)
 
-                masked = mask_email(email)
-                tprint(f"  [{masked}] 尝试 {domain}")
-                pw_cookies, err = login_in_context(context, email, password, base_url, timeout_ms)
-                context.close()
-                browser.close()
+                    tprint(f"  [{masked}] 尝试 {domain}")
+                    pw_cookies, err = login_in_context(context, email, password, base_url, timeout_ms)
 
-                if pw_cookies:
-                    return email, pw_cookies, None, domain
-                tprint(f"  [{masked}] {domain} 失败: {err}")
+                    if pw_cookies:
+                        return email, pw_cookies, None, domain
+                    tprint(f"  [{masked}] {domain} 失败: {err}")
+                finally:
+                    if context:
+                        context.close()
+                    if browser:
+                        browser.close()
         except Exception as e:
-            tprint(f"  [{mask_email(email)}] {domain} 异常: {e}")
+            tprint(f"  [{masked}] {domain} 异常: {e}")
     return email, None, f"所有域名登录失败", None
 
 
