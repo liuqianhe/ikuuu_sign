@@ -44,16 +44,33 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Restore cookie cache
+        id: cookie-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ikuuu_cookies.json
+          key: ${{ runner.os }}-cookies-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-cookies-
+
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium
 
       - name: Random jitter 0-5s
         run: sleep $(( RANDOM % 6 ))
+
       - name: Run checkin
         run: python playwright_checkin.py
         env:
           ACCOUNTS: ${{ secrets.ACCOUNTS }}
+
+      - name: Save cookie cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ikuuu_cookies.json
+          key: ${{ runner.os }}-cookies-${{ github.run_id }}
 
       - name: Post summary to issue (仅失败时)
         if: always()
