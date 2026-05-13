@@ -9,6 +9,8 @@ import datetime
 import re
 import sys
 import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from bs4 import BeautifulSoup
 
 try:
@@ -286,6 +288,53 @@ def login_in_context(context, email, password, base_url, timeout_ms=60000):
         page.close()
 
 
+# ─────────────── 并行登录一个账号 ───────────────
+_print_lock = Lock()
+
+def tprint(*args, **kwargs):
+    with _print_lock:
+        print(*args, **kwargs)
+
+
+def login_account(email, password, domains, headless, timeout_ms=60000):
+    """独立浏览器登录单个账号，返回 (email, cookies, err, domain)"""
+    for domain in domains:
+        base_url = f"https://{domain}"
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(
+                    headless=headless,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-gpu",
+                        "--disable-dev-shm-usage",
+                        "--disable-blink-features=AutomationControlled",
+                    ],
+                )
+                context = browser.new_context(
+                    user_agent=USER_AGENT,
+                    viewport={"width": 1280, "height": 800},
+                    locale="zh-CN",
+                )
+                context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+                """)
+
+                masked = mask_email(email)
+                tprint(f"  [{masked}] 尝试 {domain}")
+                pw_cookies, err = login_in_context(context, email, password, base_url, timeout_ms)
+                context.close()
+                browser.close()
+
+                if pw_cookies:
+                    return email, pw_cookies, None, domain
+                tprint(f"  [{masked}] {domain} 失败: {err}")
+        except Exception as e:
+            tprint(f"  [{mask_email(email)}] {domain} 异常: {e}")
+    return email, None, f"所有域名登录失败", None
+
+
 # ─────────────── 主流程 ───────────────
 if __name__ == "__main__":
     print("🚀 iKuuu Playwright 签到脚本启动")
@@ -329,64 +378,49 @@ if __name__ == "__main__":
         if not ok:
             need_login.append((idx, email, pwd))
 
-    # 第二轮：需要登录的，遍历域名重试
+    # 第二轮：需要登录的，并行跑（每个账号独立浏览器）
     if need_login:
-        print(f"\n🎭 启动浏览器，处理 {len(need_login)} 个需要登录的账号...")
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=headless,
-                args=[
-                    "--no-sandbox",
-                    "--disable-gpu",
-                    "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled",
-                ],
-            )
+        print(f"\n🎭 并行登录 {len(need_login)} 个账号（每个账号独立浏览器）...")
+        login_results = [None] * len(need_login)
+        with ThreadPoolExecutor(max_workers=len(need_login)) as executor:
+            fut_map = {}
             for idx, email, pwd in need_login:
-                masked = mask_email(email)
-                print(f"\n👤 [{idx}/{len(accounts)}] {masked}")
-                done = False
-                for domain in DOMAINS:
-                    base_url = f"https://{domain}"
-                    print(f"  尝试域名: {domain}")
-                    context = browser.new_context(
-                        user_agent=USER_AGENT,
-                        viewport={"width": 1280, "height": 800},
-                        locale="zh-CN",
-                    )
-                    context.add_init_script("""
-                        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-                    """)
+                fut = executor.submit(login_account, email, pwd, DOMAINS, headless)
+                fut_map[fut] = (idx, email)
 
-                    pw_cookies, err = login_in_context(context, email, pwd, base_url)
-                    if err or not pw_cookies:
-                        print(f"  ⚠️ [{domain}] 登录失败: {err}")
-                        context.close()
-                        continue
+            for fut in as_completed(fut_map):
+                idx, email = fut_map[fut]
+                try:
+                    ret_email, pw_cookies, err, domain = fut.result()
+                except Exception as e:
+                    ret_email, pw_cookies, err, domain = email, None, str(e), None
+                login_results[idx - 1] = (ret_email, pw_cookies, err, domain)
 
-                    save_session_cookie(email, base_url, pw_cookies)
-                    print(f"  💾 Cookie 已保存")
+        # 处理所有登录结果
+        for idx, email, pwd in need_login:
+            masked = mask_email(email)
+            ret_email, pw_cookies, err, domain = login_results[idx - 1]
+            base_url = f"https://{domain}" if domain else None
 
-                    cookie_dict = {c["name"]: c["value"] for c in pw_cookies if c.get("name") and c.get("value") is not None}
-                    flow_val, flow_unit = get_remaining_flow(cookie_dict, base_url)
-                    sess = requests.session()
-                    sess.cookies = requests.utils.cookiejar_from_dict(cookie_dict)
-                    ok_s, msg = do_checkin(sess, base_url)
+            if err or not pw_cookies:
+                print(f"  ❌ {masked} 登录失败: {err}")
+                results.append({"email": masked, "success": False, "message": f"登录失败: {err}", "flow_value": "-", "flow_unit": "-", "domain": domain or "all"})
+                continue
 
-                    results.append({"email": masked, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain})
-                    icon = "✅" if ok_s else "❌"
-                    print(f"  {icon} {msg}")
-                    print(f"  📊 剩余流量: {flow_val} {flow_unit}")
+            if base_url:
+                save_session_cookie(email, base_url, pw_cookies)
+                print(f"  💾 {masked} Cookie 已保存 ({domain})")
 
-                    context.close()
-                    done = True
-                    break
+                cookie_dict = {c["name"]: c["value"] for c in pw_cookies if c.get("name") and c.get("value") is not None}
+                flow_val, flow_unit = get_remaining_flow(cookie_dict, base_url)
+                sess = requests.session()
+                sess.cookies = requests.utils.cookiejar_from_dict(cookie_dict)
+                ok_s, msg = do_checkin(sess, base_url)
 
-                if not done:
-                    results.append({"email": masked, "success": False, "message": f"所有域名登录失败", "flow_value": "-", "flow_unit": "-", "domain": "all"})
-
-            browser.close()
+                results.append({"email": masked, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain})
+                icon = "✅" if ok_s else "❌"
+                print(f"  {icon} {masked} {msg}")
+                print(f"  📊 剩余流量: {flow_val} {flow_unit}")
 
     # 输出结果文件供 workflow 读取
     has_failure = any(not r["success"] for r in results)
