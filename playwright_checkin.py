@@ -261,15 +261,43 @@ def login_in_context(context, email, password, base_url, timeout_ms=60000):
 
 
 # ─────────────── 并行登录一个账号 ───────────────
-_print_lock = Lock()
+_context_lock = Lock()
 
-def tprint(*args, **kwargs):
-    with _print_lock:
-        print(*args, **kwargs)
+
+def login_with_shared_browser(browser, email, password, domains, timeout_ms=60000):
+    """共用 browser，每个账号独立 context 并行登录"""
+    masked = mask_email(email)
+    for domain in domains:
+        base_url = f"https://{domain}"
+        context = None
+        try:
+            with _context_lock:
+                context = browser.new_context(
+                    user_agent=USER_AGENT,
+                    viewport={"width": 1280, "height": 800},
+                    locale="zh-CN",
+                )
+                context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+                """)
+
+            tprint(f"  [{masked}] 尝试 {domain}")
+            pw_cookies, err = login_in_context(context, email, password, base_url, timeout_ms)
+
+            if pw_cookies:
+                return email, pw_cookies, None, domain
+            tprint(f"  [{masked}] {domain} 失败: {err}")
+        except Exception as e:
+            tprint(f"  [{masked}] {domain} 异常: {e}")
+        finally:
+            if context:
+                context.close()
+    return email, None, f"所有域名登录失败", None
 
 
 def login_account(email, password, domains, headless, timeout_ms=60000):
-    """独立浏览器登录单个账号，返回 (email, cookies, err, domain)"""
+    """独立浏览器登录单个账号（备选方案）"""
     for domain in domains:
         base_url = f"https://{domain}"
         masked = mask_email(email)
@@ -378,23 +406,34 @@ if __name__ == "__main__":
             if should_login:
                 need_login.append((idx, email, pwd))
 
-    # 第二轮：需要登录的，并行跑（每个账号独立浏览器）
+    # 第二轮：需要登录的，共用一个 browser，每个账号独立 context 并行
     if need_login:
-        print(f"\n🎭 并行登录 {len(need_login)} 个账号（每个账号独立浏览器）...")
+        print(f"\n🎭 共用一个浏览器，并行登录 {len(need_login)} 个账号...")
         login_results = [None] * len(need_login)
-        with ThreadPoolExecutor(max_workers=len(need_login)) as executor:
-            fut_map = {}
-            for idx, email, pwd in need_login:
-                fut = executor.submit(login_account, email, pwd, DOMAINS, headless)
-                fut_map[fut] = (idx, email)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=headless,
+                args=[
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+            )
+            with ThreadPoolExecutor(max_workers=len(need_login)) as executor:
+                fut_map = {}
+                for idx, email, pwd in need_login:
+                    fut = executor.submit(login_with_shared_browser, browser, email, pwd, DOMAINS)
+                    fut_map[fut] = (idx, email)
 
-            for fut in as_completed(fut_map, timeout=120):
-                idx, email = fut_map[fut]
-                try:
-                    ret_email, pw_cookies, err, domain = fut.result(timeout=120)
-                except Exception as e:
-                    ret_email, pw_cookies, err, domain = email, None, str(e), None
-                login_results[idx - 1] = (ret_email, pw_cookies, err, domain)
+                for fut in as_completed(fut_map, timeout=180):
+                    idx, email = fut_map[fut]
+                    try:
+                        ret_email, pw_cookies, err, domain = fut.result(timeout=150)
+                    except Exception as e:
+                        ret_email, pw_cookies, err, domain = email, None, str(e), None
+                    login_results[idx - 1] = (ret_email, pw_cookies, err, domain)
+            browser.close()
 
         # 处理所有登录结果
         for idx, email, pwd in need_login:
