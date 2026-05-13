@@ -4,14 +4,10 @@ Playwright 方案：模拟点击 → 等它自动跳转 → 直接从浏览器�
 import os
 import json
 import time
-import base64
-import datetime
-import re
 import sys
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
-from bs4 import BeautifulSoup
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
@@ -138,31 +134,6 @@ def validate_cookie(session, base_url):
         return False
     except Exception:
         return False
-
-# ─────────────── 获取剩余流量（复用原逻辑） ───────────────
-def get_remaining_flow(cookies, base_url=None):
-    user_url = f'{base_url or "https://ikuuu.fyi"}/user'
-    try:
-        user_page = requests.get(user_url, cookies=cookies, headers={"User-Agent": USER_AGENT}, timeout=20)
-        if user_page.status_code != 200:
-            return "获取失败", f"状态码: {user_page.status_code}"
-        match = re.search(r'var originBody = "([^"]+)"', user_page.text)
-        if not match:
-            return "未找到", "Base64内容"
-        decoded = base64.b64decode(match.group(1)).decode('utf-8')
-        soup = BeautifulSoup(decoded, 'html.parser')
-        for card in soup.find_all('div', class_='card card-statistic-2'):
-            h4 = card.find('h4')
-            if h4 and '剩余流量' in h4.text:
-                counter = card.find('span', class_='counter')
-                if counter:
-                    val = counter.text.strip()
-                    nxt = counter.next_sibling
-                    unit = nxt.strip() if nxt else ""
-                    return val, unit
-        return "未找到", "流量信息"
-    except Exception as e:
-        return "异常", str(e)
 
 # ─────────────── 签到 ───────────────
 def do_checkin(session, base_url):
@@ -360,11 +331,10 @@ if __name__ == "__main__":
             sess = requests.session()
             sess.cookies = requests.utils.cookiejar_from_dict(cached)
             if validate_cookie(sess, base_url):
-                flow_val, flow_unit = get_remaining_flow(cached, base_url)
                 ok_s, msg = do_checkin(sess, base_url)
                 masked = mask_email(email)
-                r = {"email": masked, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain}
-                tprint(f"  🍪 [{domain}] {masked} {'✅' if ok_s else '❌'} {msg} | {flow_val} {flow_unit}")
+                r = {"email": masked, "success": ok_s, "message": msg, "domain": domain}
+                tprint(f"  🍪 [{domain}] {masked} {'✅' if ok_s else '❌'} {msg}")
                 return email, r, False
             clear_session_cookie(email, base_url)
         return email, None, True
@@ -406,7 +376,7 @@ if __name__ == "__main__":
 
             if err or not pw_cookies:
                 print(f"  ❌ {masked} 登录失败: {err}")
-                results.append({"email": masked, "success": False, "message": f"登录失败: {err}", "flow_value": "-", "flow_unit": "-", "domain": domain or "all"})
+                results.append({"email": masked, "success": False, "message": f"登录失败: {err}", "domain": domain or "all"})
                 continue
 
             if base_url:
@@ -414,15 +384,13 @@ if __name__ == "__main__":
                 print(f"  💾 {masked} Cookie 已保存 ({domain})")
 
                 cookie_dict = {c["name"]: c["value"] for c in pw_cookies if c.get("name") and c.get("value") is not None}
-                flow_val, flow_unit = get_remaining_flow(cookie_dict, base_url)
                 sess = requests.session()
                 sess.cookies = requests.utils.cookiejar_from_dict(cookie_dict)
                 ok_s, msg = do_checkin(sess, base_url)
 
-                results.append({"email": masked, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain})
+                results.append({"email": masked, "success": ok_s, "message": msg, "domain": domain})
                 icon = "✅" if ok_s else "❌"
                 print(f"  {icon} {masked} {msg}")
-                print(f"  📊 剩余流量: {flow_val} {flow_unit}")
 
     # 输出结果文件供 workflow 读取
     has_failure = any(not r["success"] for r in results)
@@ -431,7 +399,7 @@ if __name__ == "__main__":
     print("=" * 50)
     for r in results:
         icon = "✅" if r["success"] else "❌"
-        line = f"{icon} {r['email']} | {r['message']} | {r['flow_value']} {r['flow_unit']}"
+        line = f"{icon} {r['email']} | {r['message']}"
         print(line)
         summary_lines.append(line)
     print("=" * 50)
