@@ -261,7 +261,13 @@ def login_in_context(context, email, password, base_url, timeout_ms=60000):
 
 
 # ─────────────── 并行登录一个账号 ───────────────
+_print_lock = Lock()
 _context_lock = Lock()
+
+
+def tprint(*args, **kwargs):
+    with _print_lock:
+        print(*args, **kwargs)
 
 
 def login_with_shared_browser(browser, email, password, domains, timeout_ms=60000):
