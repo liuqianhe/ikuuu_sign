@@ -25,7 +25,7 @@ COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ikuuu_co
 COOKIE_MAX_AGE_DAYS = 7
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-DOMAINS = ["ikuuu.fyi", "ikuuu.win", "ikuuu.org"]
+DOMAINS = ["ikuuu.fyi", "ikuuu.win"]
 RESULT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkin_result.json")
 
 # ─────────────── Cookie 存储（复用原逻辑） ───────────────

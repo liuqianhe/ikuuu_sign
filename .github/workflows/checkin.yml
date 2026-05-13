@@ -2,7 +2,7 @@ name: iKuuu Checkin
 
 on:
   schedule:
-    - cron: "28 16 * * *"
+    - cron: "10 16 * * *"
   workflow_dispatch:
 
 env:
