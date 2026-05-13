@@ -349,12 +349,9 @@ if __name__ == "__main__":
 
     results = []
 
-    # 第一轮：所有账号先试本地 cookie（取第一个域名试）
-    need_login = []
-    for idx, (email, pwd) in enumerate(accounts, 1):
-        masked = mask_email(email)
-        print(f"\n👤 [{idx}/{len(accounts)}] {masked}")
-        ok = False
+    # ── 第一轮：并行试 cookie ──
+    def cookie_checkin(email, password):
+        """返回 (email, result_dict_or_None, need_login_bool)"""
         for domain in DOMAINS:
             base_url = f"https://{domain}"
             cached = load_session_cookie(email, base_url)
@@ -363,20 +360,25 @@ if __name__ == "__main__":
             sess = requests.session()
             sess.cookies = requests.utils.cookiejar_from_dict(cached)
             if validate_cookie(sess, base_url):
-                print(f"  🍪 [{domain}] Cookie 有效，直接签到")
                 flow_val, flow_unit = get_remaining_flow(cached, base_url)
                 ok_s, msg = do_checkin(sess, base_url)
-                results.append({"email": masked, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain})
-                icon = "✅" if ok_s else "❌"
-                print(f"  {icon} {msg}")
-                print(f"  📊 剩余流量: {flow_val} {flow_unit}")
-                ok = True
-                break
-            else:
-                print(f"  ⚠️ [{domain}] Cookie 已失效")
-                clear_session_cookie(email, base_url)
-        if not ok:
-            need_login.append((idx, email, pwd))
+                masked = mask_email(email)
+                r = {"email": masked, "success": ok_s, "message": msg, "flow_value": flow_val, "flow_unit": flow_unit, "domain": domain}
+                tprint(f"  🍪 [{domain}] {masked} {'✅' if ok_s else '❌'} {msg} | {flow_val} {flow_unit}")
+                return email, r, False
+            clear_session_cookie(email, base_url)
+        return email, None, True
+
+    need_login = []
+    with ThreadPoolExecutor(max_workers=len(accounts)) as executor:
+        fut_map = {executor.submit(cookie_checkin, email, pwd): (idx, email, pwd) for idx, (email, pwd) in enumerate(accounts, 1)}
+        for fut in as_completed(fut_map):
+            idx, email, pwd = fut_map[fut]
+            ret_email, result, should_login = fut.result()
+            if result:
+                results.append(result)
+            if should_login:
+                need_login.append((idx, email, pwd))
 
     # 第二轮：需要登录的，并行跑（每个账号独立浏览器）
     if need_login:
