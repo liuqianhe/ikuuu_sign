@@ -8,6 +8,7 @@ import sys
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from threading import Lock
+from filelock import FileLock
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
@@ -28,7 +29,7 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 DOMAINS = ["ikuuu.fyi", "ikuuu.win"]
 RESULT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkin_result.json")
 
-_cookie_store_lock = Lock()
+_cookie_file_lock = FileLock(COOKIE_FILE + ".lock", timeout=10)
 COOKIE_MAX_AGE_DAYS = 7
 
 def get_cookie_key(email, base_url):
@@ -55,7 +56,7 @@ def _save_cookie_store_unlocked(store):
         tprint(f"  ⚠️ 保存cookie失败: {e}")
 
 def save_session_cookie(email, base_url, pw_cookies):
-    with _cookie_store_lock:
+    with _cookie_file_lock:
         store = _load_cookie_store_unlocked()
         key = get_cookie_key(email, base_url)
         cookie_dict = {}
@@ -76,7 +77,7 @@ def save_session_cookie(email, base_url, pw_cookies):
         _save_cookie_store_unlocked(store)
 
 def load_session_cookie(email, base_url):
-    with _cookie_store_lock:
+    with _cookie_file_lock:
         store = _load_cookie_store_unlocked()
         key = get_cookie_key(email, base_url)
         item = store.get(key)
@@ -92,7 +93,7 @@ def load_session_cookie(email, base_url):
         return cookies
 
 def clear_session_cookie(email, base_url):
-    with _cookie_store_lock:
+    with _cookie_file_lock:
         store = _load_cookie_store_unlocked()
         key = get_cookie_key(email, base_url)
         if key in store:
