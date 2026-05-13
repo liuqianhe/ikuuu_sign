@@ -53,49 +53,52 @@ def save_cookie_store(store):
             with open(COOKIE_FILE, "w", encoding="utf-8") as f:
                 json.dump(store, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"  ⚠️ 保存cookie失败: {e}")
+            tprint(f"  ⚠️ 保存cookie失败: {e}")
 
 def save_session_cookie(email, base_url, pw_cookies):
-    key = get_cookie_key(email, base_url)
-    store = load_cookie_store()
-    cookie_dict = {}
-    for c in pw_cookies:
-        if c.get("sameSite") == "None":
-            c["sameSite"] = "none"
-        name = c.get("name")
-        value = c.get("value")
-        if name and value is not None:
-            cookie_dict[name] = value
-    store[key] = {
-        "email": email,
-        "base_url": base_url,
-        "saved_at": int(time.time()),
-        "cookies": cookie_dict,
-        "source": "playwright",
-    }
-    save_cookie_store(store)
+    with _cookie_store_lock:
+        key = get_cookie_key(email, base_url)
+        store = load_cookie_store()
+        cookie_dict = {}
+        for c in pw_cookies:
+            if c.get("sameSite") == "None":
+                c["sameSite"] = "none"
+            name = c.get("name")
+            value = c.get("value")
+            if name and value is not None:
+                cookie_dict[name] = value
+        store[key] = {
+            "email": email,
+            "base_url": base_url,
+            "saved_at": int(time.time()),
+            "cookies": cookie_dict,
+            "source": "playwright",
+        }
+        save_cookie_store(store)
 
 def load_session_cookie(email, base_url):
-    key = get_cookie_key(email, base_url)
-    store = load_cookie_store()
-    item = store.get(key)
-    if not item:
-        return None
-    saved_at = int(item.get("saved_at", 0))
-    max_age = COOKIE_MAX_AGE_DAYS * 24 * 3600
-    if not saved_at or time.time() - saved_at > max_age:
-        return None
-    cookies = item.get("cookies")
-    if not isinstance(cookies, dict) or not cookies:
-        return None
-    return cookies
+    with _cookie_store_lock:
+        key = get_cookie_key(email, base_url)
+        store = load_cookie_store()
+        item = store.get(key)
+        if not item:
+            return None
+        saved_at = int(item.get("saved_at", 0))
+        max_age = COOKIE_MAX_AGE_DAYS * 24 * 3600
+        if not saved_at or time.time() - saved_at > max_age:
+            return None
+        cookies = item.get("cookies")
+        if not isinstance(cookies, dict) or not cookies:
+            return None
+        return cookies
 
 def clear_session_cookie(email, base_url):
-    key = get_cookie_key(email, base_url)
-    store = load_cookie_store()
-    if key in store:
-        del store[key]
-        save_cookie_store(store)
+    with _cookie_store_lock:
+        key = get_cookie_key(email, base_url)
+        store = load_cookie_store()
+        if key in store:
+            del store[key]
+            save_cookie_store(store)
 
 # ─────────────── 邮箱脱敏 ───────────────
 def mask_email(email):
