@@ -8,6 +8,7 @@ import sys
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from threading import Lock
+from filelock import FileLock
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
@@ -28,7 +29,7 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 DOMAINS = ["ikuuu.fyi", "ikuuu.win"]
 RESULT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkin_result.json")
 
-_cookie_store_lock = Lock()
+_cookie_store_lock = FileLock(COOKIE_FILE + ".lock")
 
 # ─────────────── Cookie 存储（复用原逻辑） ───────────────
 def get_cookie_key(email, base_url):
