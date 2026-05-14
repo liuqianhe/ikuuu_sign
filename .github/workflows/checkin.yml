@@ -44,14 +44,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Restore cookie cache
-        id: cookie-restore
-        uses: actions/cache/restore@v4
+      - name: Cookie cache
+        id: cookie-cache
+        uses: actions/cache@v4
         with:
           path: ikuuu_cookies.json
-          key: ${{ runner.os }}-cookies-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-cookies-
+          key: ${{ runner.os }}-cookies-v1
 
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
@@ -64,13 +62,6 @@ jobs:
         run: python playwright_checkin.py
         env:
           ACCOUNTS: ${{ secrets.ACCOUNTS }}
-
-      - name: Save cookie cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: ikuuu_cookies.json
-          key: ${{ runner.os }}-cookies-${{ github.run_id }}
 
       - name: Post summary to issue (仅失败时)
         if: always()
