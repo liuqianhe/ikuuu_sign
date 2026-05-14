@@ -468,6 +468,8 @@ if __name__ == "__main__":
 
                 if ok_s:
                     save_session_cookie(email, base_url, pw_cookies)
+                    with open("cookie_updated.flag", "w") as f:
+                        f.write("1")
                     print(f"  💾 {masked} Cookie 已保存 ({domain})")
 
                 results.append({"email": masked, "success": ok_s, "message": msg, "domain": domain})
