@@ -1,17 +1,17 @@
 """
-Playwright 方案：模拟点击 → 等它自动跳转 → 直接从浏览器拿 Cookie
+Playwright async 方案：共享浏览器 + asyncio.gather，同一线程无竞态
 """
 import os
 import json
 import time
 import sys
 import random
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+import asyncio
 from threading import Lock
 from filelock import FileLock
 
 try:
-    from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
+    from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 except ImportError as e:
     print(f"❌ Playwright 导入失败: {e}")
     print("请运行: pip install playwright==1.48.0")
@@ -169,11 +169,18 @@ def do_checkin(session, base_url):
     except Exception as e:
         return False, f"签到异常: {e}"
 
-# ─────────────── 模拟真人鼠标移动 ───────────────
-def human_click(page, element):
-    box = element.bounding_box()
+# ─────────────── 线程安全打印 ───────────────
+_print_lock = Lock()
+
+def tprint(*args, **kwargs):
+    with _print_lock:
+        print(*args, **kwargs)
+
+# ─────────────── 模拟真人鼠标移动（async）───────────────
+async def human_click_async(page, element):
+    box = await element.bounding_box()
     if not box:
-        element.click()
+        await element.click()
         return
     viewport = page.viewport_size
     start_x = viewport["width"] * random.uniform(0.3, 0.7)
@@ -187,73 +194,76 @@ def human_click(page, element):
         ease = 1 - (1 - t) ** 2
         curr_x = start_x + (target_x - start_x) * ease
         curr_y = start_y + (target_y - start_y) * ease
-        page.mouse.move(curr_x, curr_y)
-        page.wait_for_timeout(random.randint(8, 18))
+        await page.mouse.move(curr_x, curr_y)
+        await page.wait_for_timeout(random.randint(8, 18))
 
-    page.wait_for_timeout(random.randint(80, 250))
-    page.mouse.click(target_x, target_y)
+    await page.wait_for_timeout(random.randint(80, 250))
+    await page.mouse.click(target_x, target_y)
 
 
-# ─────────────── Playwright 登录（context 级别）───────────────
-def login_in_context(context, email, password, base_url, timeout_ms=60000):
+# ─────────────── Playwright 登录（context 级别，async）───────────────
+async def login_in_context_async(context, email, password, base_url, timeout_ms=60000):
     """
     在已有 context 中完成登录流程，返回 cookies 或 None
     """
-    page = context.new_page()
+    page = await context.new_page()
 
-    # 拦截无用资源（图片/字体/媒体），不下载省时间
-    page.route("**/*", lambda route: route.abort()
-        if route.request.resource_type in ("image", "font", "media")
-        else route.continue_())
+    async def abort_unused(route):
+        if route.request.resource_type in ("image", "font", "media"):
+            await route.abort()
+        else:
+            await route.continue_()
+
+    await page.route("**/*", abort_unused)
 
     login_url = f"{base_url}/auth/login"
 
     try:
         print(f"  🌐 打开登录页: {login_url}")
-        page.goto(login_url, wait_until="domcontentloaded", timeout=timeout_ms)
-        print(f"  ✅ 页面加载完成: {page.title()}")
+        await page.goto(login_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        print(f"  ✅ 页面加载完成: {await page.title()}")
 
-        page.wait_for_selector('#email', timeout=10000)
+        await page.wait_for_selector('#email', timeout=10000)
         print(f"  📝 填写账号密码...")
 
-        page.fill('#email', email)
-        page.fill('#password', password)
+        await page.fill('#email', email)
+        await page.fill('#password', password)
 
-        page.wait_for_selector('.embed-captcha', timeout=10000)
+        await page.wait_for_selector('.embed-captcha', timeout=10000)
 
         try:
-            page.click('.geetest_btn_click', timeout=5000)
+            await page.click('.geetest_btn_click', timeout=5000)
             print(f"  ✅ 已点击验证按钮")
         except:
             print(f"  ℹ️ 未找到验证按钮，可能无需点击")
 
-        page.wait_for_function(
+        await page.wait_for_function(
             "() => window.Captcha && window.Captcha.isReady()",
             timeout=20000
         )
 
-        login_btn = page.query_selector('button[type="submit"]')
+        login_btn = await page.query_selector('button[type="submit"]')
         if not login_btn:
             return None, "未找到登录按钮"
 
         print(f"  🖱️ 模拟真人移动并点击登录...")
-        human_click(page, login_btn)
+        await human_click_async(page, login_btn)
 
         try:
-            page.wait_for_url(
+            await page.wait_for_url(
                 lambda url: "/user" in url or "/dashboard" in url or "checkin" in url,
                 timeout=15000,
             )
             print(f"  ✅ 检测到跳转: {page.url}")
         except PwTimeout:
             current_url = page.url
-            content = page.content()
+            content = await page.content()
             if "/auth/login" not in current_url or "签到" in content or "剩余流量" in content:
                 print(f"  ⚠️ 未检测到跳转，但页面内容可能已成功: {current_url}")
             else:
                 return None, "登录后未检测到期望的页面跳转"
 
-        pw_cookies = context.cookies()
+        pw_cookies = await context.cookies()
         if not pw_cookies:
             return None, "未获取到 Cookie"
 
@@ -265,66 +275,42 @@ def login_in_context(context, email, password, base_url, timeout_ms=60000):
     except Exception as e:
         return None, f"异常: {e}"
     finally:
-        page.close()
+        await page.close()
 
 
-# ─────────────── 并行登录一个账号 ───────────────
-_print_lock = Lock()
-
-
-def tprint(*args, **kwargs):
-    with _print_lock:
-        print(*args, **kwargs)
-
-
-def login_account(email, password, domains, headless, timeout_ms=60000):
-    """独立浏览器登录单个账号"""
+# ─────────────── 共享浏览器登录（async）───────────────
+async def login_account_async(browser, email, password, domains, timeout_ms=60000):
+    """共享 browser，async 版本"""
     for domain in domains:
         base_url = f"https://{domain}"
         masked = mask_email(email)
+        context = None
         try:
-            with sync_playwright() as p:
-                browser = None
-                context = None
-                try:
-                    browser = p.chromium.launch(
-                        headless=headless,
-                        args=[
-                            "--no-sandbox",
-                            "--disable-gpu",
-                            "--disable-dev-shm-usage",
-                            "--disable-blink-features=AutomationControlled",
-                        ],
-                    )
-                    context = browser.new_context(
-                        user_agent=USER_AGENT,
-                        viewport={"width": 1280, "height": 800},
-                        locale="zh-CN",
-                    )
-                    context.add_init_script("""
-                        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-                    """)
-                    tprint(f"  [{masked}] 尝试 {domain}")
-                    pw_cookies, err = login_in_context(context, email, password, base_url, timeout_ms)
-                    if pw_cookies:
-                        return email, pw_cookies, None, domain
-                    tprint(f"  [{masked}] {domain} 失败: {err}")
-                except Exception as e:
-                    tprint(f"  [{masked}] {domain} 异常: {e}")
-                finally:
-                    if context:
-                        context.close()
-                    if browser:
-                        browser.close()
+            context = await browser.new_context(
+                user_agent=USER_AGENT,
+                viewport={"width": 1280, "height": 800},
+                locale="zh-CN",
+            )
+            await context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+            """)
+            tprint(f"  [{masked}] 尝试 {domain}")
+            pw_cookies, err = await login_in_context_async(context, email, password, base_url, timeout_ms)
+            if pw_cookies:
+                return email, pw_cookies, None, domain
+            tprint(f"  [{masked}] {domain} 失败: {err}")
         except Exception as e:
-            tprint(f"  [{masked}] {domain} 启动浏览器失败: {e}")
-    return email, None, f"所有域名登录失败", None
+            tprint(f"  [{masked}] {domain} 异常: {e}")
+        finally:
+            if context:
+                await context.close()
+    return email, None, "所有域名登录失败", None
 
 
-# ─────────────── 主流程 ───────────────
-if __name__ == "__main__":
-    print("🚀 iKuuu Playwright 签到脚本启动")
+# ─────────────── 异步主流程 ───────────────
+async def async_main():
+    print("🚀 iKuuu Playwright 签到脚本启动 (async)")
     print("=" * 50)
 
     headless = os.getenv("PLAYWRIGHT_HEADLESS", "1") != "0"
@@ -335,8 +321,9 @@ if __name__ == "__main__":
         sys.exit(1)
 
     results = []
+    loop = asyncio.get_event_loop()
 
-    # ── 第一轮：并行试 cookie，网络异常保留cookie ──
+    # ── 第一轮：并行试 cookie ──
     def cookie_checkin(email, password):
         """返回 (email, result_dict_or_None, need_login)"""
         for domain in DOMAINS:
@@ -356,7 +343,6 @@ if __name__ == "__main__":
                 r = {"email": masked, "success": ok_s, "message": msg, "domain": domain}
                 tprint(f"  🍪 [{domain}] {masked} {'✅' if ok_s else '❌'} {msg}")
                 return email, r, False
-            # status is False → cookie 真正失效
             tprint(f"  🗑️ [{domain}] {mask_email(email)} cookie 已过期，清理")
             clear_session_cookie(email, base_url)
         return email, None, True
@@ -371,44 +357,50 @@ if __name__ == "__main__":
                 time.sleep(attempt + 1)
         return email, None, True
 
+    # 并行跑 cookie 签到（在线程池中执行 sync 代码）
+    task_map = {}
+    for idx, (email, pwd) in enumerate(accounts, 1):
+        coro = loop.run_in_executor(None, cookie_checkin_with_retry, email, pwd)
+        task_map[coro] = (idx, email, pwd)
+
     need_login = []
-    with ThreadPoolExecutor(max_workers=len(accounts)) as executor:
-        fut_map = {executor.submit(cookie_checkin_with_retry, email, pwd): (idx, email, pwd) for idx, (email, pwd) in enumerate(accounts, 1)}
-        for fut in as_completed(fut_map, timeout=120):
-            idx, email, pwd = fut_map[fut]
-            try:
-                ret_email, result, should_login = fut.result(timeout=30)
-            except TimeoutError:
-                tprint(f"  ⚠️ {mask_email(email)} cookie 签到超时，转入浏览器登录")
-                result = None
-                should_login = True
-            if result:
-                results.append(result)
-            if should_login:
-                need_login.append((idx, email, pwd))
+    for coro in asyncio.as_completed(task_map.keys(), timeout=120):
+        idx, email, pwd = task_map[coro]
+        try:
+            ret_email, result, should_login = await coro
+        except asyncio.TimeoutError:
+            tprint(f"  ⚠️ {mask_email(email)} cookie 签到超时，转入浏览器登录")
+            result = None
+            should_login = True
 
-    # 第二轮：需要登录的，每个账号独立浏览器并行
+        if result:
+            results.append(result)
+        if should_login:
+            need_login.append((idx, email, pwd))
+
+    # 第二轮：共享浏览器 + asyncio.gather
     if need_login:
-        print(f"\n🌐 并行登录 {len(need_login)} 个账号（每个独立浏览器）...")
-        login_results = [None] * len(need_login)
-        with ThreadPoolExecutor(max_workers=len(need_login)) as executor:
-            fut_map = {}
-            for idx, email, pwd in need_login:
-                fut = executor.submit(login_account, email, pwd, DOMAINS, headless)
-                fut_map[fut] = (idx, email)
-
-            for fut in as_completed(fut_map, timeout=180):
-                idx, email = fut_map[fut]
-                try:
-                    ret_email, pw_cookies, err, domain = fut.result(timeout=150)
-                except Exception as e:
-                    ret_email, pw_cookies, err, domain = email, None, str(e), None
-                login_results[idx - 1] = (ret_email, pw_cookies, err, domain)
+        print(f"\n🎭 共享浏览器，async 并行登录 {len(need_login)} 个账号...")
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=headless,
+                args=[
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+            )
+            login_tasks = [
+                login_account_async(browser, email, pwd, DOMAINS)
+                for idx, email, pwd in need_login
+            ]
+            login_results = await asyncio.gather(*login_tasks)
+            await browser.close()
 
         # 处理所有登录结果
-        for idx, email, pwd in need_login:
+        for (idx, email, pwd), (ret_email, pw_cookies, err, domain) in zip(need_login, login_results):
             masked = mask_email(email)
-            ret_email, pw_cookies, err, domain = login_results[idx - 1]
             base_url = f"https://{domain}" if domain else None
 
             if err or not pw_cookies:
@@ -450,3 +442,7 @@ if __name__ == "__main__":
             json.dump({"results": results, "summary": "\n".join(summary_lines), "has_failure": has_failure}, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+
+if __name__ == "__main__":
+    asyncio.run(async_main())
