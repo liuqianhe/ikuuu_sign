@@ -359,15 +359,17 @@ async def async_main():
 
     # 并行跑 cookie 签到（在线程池中执行 sync 代码）
     task_map = {}
+    checkin_tasks = []
     for idx, (email, pwd) in enumerate(accounts, 1):
-        coro = loop.run_in_executor(None, cookie_checkin_with_retry, email, pwd)
-        task_map[coro] = (idx, email, pwd)
+        task = asyncio.ensure_future(loop.run_in_executor(None, cookie_checkin_with_retry, email, pwd))
+        task_map[task] = (idx, email, pwd)
+        checkin_tasks.append(task)
 
     need_login = []
-    for coro in asyncio.as_completed(task_map.keys(), timeout=120):
-        idx, email, pwd = task_map[coro]
+    for task in asyncio.as_completed(checkin_tasks, timeout=120):
+        idx, email, pwd = task_map[task]
         try:
-            ret_email, result, should_login = await coro
+            ret_email, result, should_login = await task
         except asyncio.TimeoutError:
             tprint(f"  ⚠️ {mask_email(email)} cookie 签到超时，转入浏览器登录")
             result = None
