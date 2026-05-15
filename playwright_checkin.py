@@ -347,37 +347,47 @@ async def async_main():
             clear_session_cookie(email, base_url)
         return email, None, True
 
-    def cookie_checkin_with_retry(email, password, max_retries=2):
+    def cookie_checkin_with_retry(idx, email, password, max_retries=2):
         for attempt in range(max_retries):
             ret_email, result, need_login = cookie_checkin(email, password)
             if result or not need_login:
-                return ret_email, result, need_login
+                return idx, ret_email, result, need_login
             if attempt < max_retries - 1:
                 tprint(f"  🔄 {mask_email(email)} 第{attempt+1}次失败，{attempt+1}s后重试")
                 time.sleep(attempt + 1)
-        return email, None, True
+        return idx, email, None, True
 
     # 并行跑 cookie 签到（在线程池中执行 sync 代码）
-    task_map = {}
     checkin_tasks = []
+    task_to_idx = {}
     for idx, (email, pwd) in enumerate(accounts, 1):
-        task = asyncio.ensure_future(loop.run_in_executor(None, cookie_checkin_with_retry, email, pwd))
-        task_map[task] = (idx, email, pwd)
+        coro = loop.run_in_executor(None, cookie_checkin_with_retry, idx, email, pwd)
+        task = asyncio.ensure_future(coro)
         checkin_tasks.append(task)
+        task_to_idx[task] = idx
 
     need_login = []
-    for task in asyncio.as_completed(checkin_tasks, timeout=120):
-        idx, email, pwd = task_map[task]
-        try:
-            ret_email, result, should_login = await task
-        except asyncio.TimeoutError:
-            tprint(f"  ⚠️ {mask_email(email)} cookie 签到超时，转入浏览器登录")
-            result = None
-            should_login = True
+    done_set, pending_set = await asyncio.wait(checkin_tasks, timeout=120)
 
+    for task in done_set:
+        try:
+            idx, ret_email, result, should_login = task.result()
+        except Exception:
+            idx = task_to_idx.get(task)
+            email, pwd = accounts[idx - 1]
+            need_login.append((idx, email, pwd))
+            continue
+        email, pwd = accounts[idx - 1]
         if result:
             results.append(result)
         if should_login:
+            need_login.append((idx, email, pwd))
+
+    for task in pending_set:
+        idx = task_to_idx.get(task)
+        if idx:
+            email, pwd = accounts[idx - 1]
+            tprint(f"  ⚠️ {mask_email(email)} cookie 签到超时，转入浏览器登录")
             need_login.append((idx, email, pwd))
 
     # 第二轮：共享浏览器 + asyncio.gather
