@@ -347,25 +347,26 @@ async def async_main():
 
     # ── 第一轮：并行试 cookie（在线程池中执行 sync 代码）──
     checkin_tasks = []
+    task_to_idx = {}
     executor = ThreadPoolExecutor(max_workers=20)
     for idx, (email, pwd) in enumerate(accounts, 1):
         coro = loop.run_in_executor(executor, cookie_checkin_with_retry, idx, email, pwd)
         task = asyncio.ensure_future(coro)
-        checkin_tasks.append((idx, task))
+        checkin_tasks.append(task)
+        task_to_idx[task] = idx
 
     need_login = []
-    done_set, pending_set = await asyncio.wait([t for _, t in checkin_tasks], timeout=120)
-    task_idx = {t: idx for idx, t in checkin_tasks}
+    done_set, pending_set = await asyncio.wait(checkin_tasks, timeout=120)
 
     for task in pending_set:
         task.cancel()
-        idx = task_idx[task]
+        idx = task_to_idx[task]
         email, pwd = accounts[idx - 1]
         tprint(f"  ⚠️ {mask_email(email)} cookie 签到超时，转入浏览器登录")
         need_login.append((idx, email, pwd))
 
     for task in done_set:
-        idx = task_idx[task]
+        idx = task_to_idx[task]
         try:
             _, ret_email, result, should_login = task.result()
             if result:
