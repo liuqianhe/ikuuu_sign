@@ -295,6 +295,42 @@ async def login_account_async(browser, email, password, domains, timeout_ms=6000
     return email, None, "所有域名登录失败", None
 
 
+# ─────────────── Cookie 预检（sync，在线程池中执行）───────────────
+def cookie_checkin(email, password):
+    """返回 (email, result_dict_or_None, need_login)"""
+    for domain in DOMAINS:
+        base_url = f"https://{domain}"
+        cached = load_session_cookie(email, base_url)
+        if not cached:
+            continue
+        sess = requests.session()
+        sess.cookies = requests.utils.cookiejar_from_dict(cached)
+        status = validate_cookie(sess, base_url)
+        if status is None:
+            tprint(f"  ⚠️ {mask_email(email)} [{domain}] 网络异常，保留 cookie 下次再试")
+            return email, None, True
+        if status is True:
+            ok_s, msg = do_checkin(sess, base_url)
+            masked = mask_email(email)
+            r = {"email": masked, "success": ok_s, "message": msg, "domain": domain}
+            tprint(f"  🍪 [{domain}] {masked} {'✅' if ok_s else '❌'} {msg}")
+            return email, r, False
+        tprint(f"  🗑️ [{domain}] {mask_email(email)} cookie 已过期，清理")
+        clear_session_cookie(email, base_url)
+    return email, None, True
+
+
+def cookie_checkin_with_retry(idx, email, password, max_retries=2):
+    for attempt in range(max_retries):
+        ret_email, result, need_login = cookie_checkin(email, password)
+        if result or not need_login:
+            return idx, ret_email, result, need_login
+        if attempt < max_retries - 1:
+            tprint(f"  🔄 {mask_email(email)} 第{attempt+1}次失败，{attempt+1}s后重试")
+            time.sleep(attempt + 1)
+    return idx, email, None, True
+
+
 # ─────────────── 异步主流程 ───────────────
 async def async_main():
     print("🚀 iKuuu Playwright 签到脚本启动 (async)")
@@ -310,41 +346,7 @@ async def async_main():
     results = []
     loop = asyncio.get_event_loop()
 
-    # ── 第一轮：并行试 cookie ──
-    def cookie_checkin(email, password):
-        """返回 (email, result_dict_or_None, need_login)"""
-        for domain in DOMAINS:
-            base_url = f"https://{domain}"
-            cached = load_session_cookie(email, base_url)
-            if not cached:
-                continue
-            sess = requests.session()
-            sess.cookies = requests.utils.cookiejar_from_dict(cached)
-            status = validate_cookie(sess, base_url)
-            if status is None:
-                tprint(f"  ⚠️ {mask_email(email)} [{domain}] 网络异常，保留 cookie 下次再试")
-                return email, None, True
-            if status is True:
-                ok_s, msg = do_checkin(sess, base_url)
-                masked = mask_email(email)
-                r = {"email": masked, "success": ok_s, "message": msg, "domain": domain}
-                tprint(f"  🍪 [{domain}] {masked} {'✅' if ok_s else '❌'} {msg}")
-                return email, r, False
-            tprint(f"  🗑️ [{domain}] {mask_email(email)} cookie 已过期，清理")
-            clear_session_cookie(email, base_url)
-        return email, None, True
-
-    def cookie_checkin_with_retry(idx, email, password, max_retries=2):
-        for attempt in range(max_retries):
-            ret_email, result, need_login = cookie_checkin(email, password)
-            if result or not need_login:
-                return idx, ret_email, result, need_login
-            if attempt < max_retries - 1:
-                tprint(f"  🔄 {mask_email(email)} 第{attempt+1}次失败，{attempt+1}s后重试")
-                time.sleep(attempt + 1)
-        return idx, email, None, True
-
-    # 并行跑 cookie 签到（在线程池中执行 sync 代码）
+    # ── 第一轮：并行试 cookie（在线程池中执行 sync 代码）──
     checkin_tasks = []
     task_to_idx = {}
     for idx, (email, pwd) in enumerate(accounts, 1):
