@@ -2,7 +2,7 @@ name: iKuuu Checkin
 
 on:
   schedule:
-    - cron: "10 16 * * *"
+    - cron: "0 4 * * *"
   workflow_dispatch:
 
 env:
@@ -55,9 +55,6 @@ jobs:
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium
-
-      - name: Random jitter 0-5s
-        run: sleep $(( RANDOM % 6 ))
 
       - name: Run checkin
         id: checkin
