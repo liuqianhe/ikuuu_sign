@@ -49,7 +49,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ikuuu_cookies.json
-          key: ${{ runner.os }}-cookies
+          key: ${{ runner.os }}-cookies-${{ github.ref_name }}
           fail-on-cache-miss: false
 
       - name: Install Playwright browsers
@@ -74,7 +74,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ikuuu_cookies.json
-          key: ${{ runner.os }}-cookies
+          key: ${{ runner.os }}-cookies-${{ github.ref_name }}
 
       - name: Post summary to issue (仅失败时)
         if: always()
