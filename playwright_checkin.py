@@ -293,7 +293,7 @@ async def login_account_async(browser, email, password, domains, timeout_ms=6000
 
 # ─────────────── Cookie 预检（sync，在线程池中执行）───────────────
 def cookie_checkin(email, password):
-    """返回 (email, result_dict_or_None, need_login, should_retry)"""
+    """返回 (email, result_dict|None, need_login:bool, should_retry:bool)"""
     for domain in DOMAINS:
         base_url = f"https://{domain}"
         cached = load_session_cookie(email, base_url)
@@ -317,6 +317,7 @@ def cookie_checkin(email, password):
 
 
 def cookie_checkin_with_retry(idx, email, password, max_retries=2):
+    """返回 (idx, email, result_dict|None, need_login:bool)"""
     for attempt in range(max_retries):
         ret_email, result, need_login, should_retry = cookie_checkin(email, password)
         if result or not need_login:
@@ -346,29 +347,25 @@ async def async_main():
 
     # ── 第一轮：并行试 cookie（在线程池中执行 sync 代码）──
     checkin_tasks = []
-    task_to_idx = {}
     executor = ThreadPoolExecutor(max_workers=20)
     for idx, (email, pwd) in enumerate(accounts, 1):
         coro = loop.run_in_executor(executor, cookie_checkin_with_retry, idx, email, pwd)
         task = asyncio.ensure_future(coro)
-        checkin_tasks.append(task)
-        task_to_idx[task] = idx
+        checkin_tasks.append((idx, task))
 
     need_login = []
-    done_set, pending_set = await asyncio.wait(checkin_tasks, timeout=120)
+    done_set, pending_set = await asyncio.wait([t for _, t in checkin_tasks], timeout=120)
+    task_idx = {t: idx for idx, t in checkin_tasks}
 
     for task in pending_set:
         task.cancel()
-        idx = task_to_idx.get(task)
-        if idx:
-            email, pwd = accounts[idx - 1]
-            tprint(f"  ⚠️ {mask_email(email)} cookie 签到超时，转入浏览器登录")
-            need_login.append((idx, email, pwd))
+        idx = task_idx[task]
+        email, pwd = accounts[idx - 1]
+        tprint(f"  ⚠️ {mask_email(email)} cookie 签到超时，转入浏览器登录")
+        need_login.append((idx, email, pwd))
 
     for task in done_set:
-        idx = task_to_idx.get(task)
-        if idx is None:
-            continue
+        idx = task_idx[task]
         try:
             _, ret_email, result, should_login = task.result()
             if result:
