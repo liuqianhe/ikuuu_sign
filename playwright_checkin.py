@@ -16,19 +16,15 @@ except ImportError as e:
     print("请运行: pip install playwright==1.48.0")
     sys.exit(1)
 
-import urllib.parse
 from urllib.parse import urlparse
 import requests
 
 # ─────────────── 配置 ───────────────
 COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ikuuu_cookies.json")
-COOKIE_MAX_AGE_DAYS = 7
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 DOMAINS = ["ikuuu.fyi", "ikuuu.win"]
 RESULT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkin_result.json")
-
-COOKIE_MAX_AGE_DAYS = 7
 
 def get_cookie_key(email, base_url):
     host = urlparse(base_url).netloc.lower()
@@ -78,10 +74,6 @@ def load_session_cookie(email, base_url):
     key = get_cookie_key(email, base_url)
     item = store.get(key)
     if not item:
-        return None
-    saved_at = int(item.get("saved_at", 0))
-    max_age = COOKIE_MAX_AGE_DAYS * 24 * 3600
-    if not saved_at or time.time() - saved_at > max_age:
         return None
     cookies = item.get("cookies")
     if not isinstance(cookies, dict) or not cookies:
