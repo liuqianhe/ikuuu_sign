@@ -8,7 +8,6 @@ import sys
 import random
 import asyncio
 from threading import Lock
-from filelock import FileLock
 
 try:
     from playwright.async_api import async_playwright, TimeoutError as PwTimeout
@@ -29,7 +28,6 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 DOMAINS = ["ikuuu.fyi", "ikuuu.win"]
 RESULT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkin_result.json")
 
-_cookie_file_lock = FileLock(COOKIE_FILE + ".lock", timeout=10)
 COOKIE_MAX_AGE_DAYS = 7
 
 def get_cookie_key(email, base_url):
@@ -56,49 +54,46 @@ def _save_cookie_store_unlocked(store):
         tprint(f"  ⚠️ 保存cookie失败: {e}")
 
 def save_session_cookie(email, base_url, pw_cookies):
-    with _cookie_file_lock:
-        store = _load_cookie_store_unlocked()
-        key = get_cookie_key(email, base_url)
-        cookie_dict = {}
-        for c in pw_cookies:
-            if c.get("sameSite") == "None":
-                c["sameSite"] = "none"
-            name = c.get("name")
-            value = c.get("value")
-            if name and value is not None:
-                cookie_dict[name] = value
-        store[key] = {
-            "email": email,
-            "base_url": base_url,
-            "saved_at": int(time.time()),
-            "cookies": cookie_dict,
-            "source": "playwright",
-        }
-        _save_cookie_store_unlocked(store)
+    store = _load_cookie_store_unlocked()
+    key = get_cookie_key(email, base_url)
+    cookie_dict = {}
+    for c in pw_cookies:
+        if c.get("sameSite") == "None":
+            c["sameSite"] = "none"
+        name = c.get("name")
+        value = c.get("value")
+        if name and value is not None:
+            cookie_dict[name] = value
+    store[key] = {
+        "email": email,
+        "base_url": base_url,
+        "saved_at": int(time.time()),
+        "cookies": cookie_dict,
+        "source": "playwright",
+    }
+    _save_cookie_store_unlocked(store)
 
 def load_session_cookie(email, base_url):
-    with _cookie_file_lock:
-        store = _load_cookie_store_unlocked()
-        key = get_cookie_key(email, base_url)
-        item = store.get(key)
-        if not item:
-            return None
-        saved_at = int(item.get("saved_at", 0))
-        max_age = COOKIE_MAX_AGE_DAYS * 24 * 3600
-        if not saved_at or time.time() - saved_at > max_age:
-            return None
-        cookies = item.get("cookies")
-        if not isinstance(cookies, dict) or not cookies:
-            return None
-        return cookies
+    store = _load_cookie_store_unlocked()
+    key = get_cookie_key(email, base_url)
+    item = store.get(key)
+    if not item:
+        return None
+    saved_at = int(item.get("saved_at", 0))
+    max_age = COOKIE_MAX_AGE_DAYS * 24 * 3600
+    if not saved_at or time.time() - saved_at > max_age:
+        return None
+    cookies = item.get("cookies")
+    if not isinstance(cookies, dict) or not cookies:
+        return None
+    return cookies
 
 def clear_session_cookie(email, base_url):
-    with _cookie_file_lock:
-        store = _load_cookie_store_unlocked()
-        key = get_cookie_key(email, base_url)
-        if key in store:
-            del store[key]
-            _save_cookie_store_unlocked(store)
+    store = _load_cookie_store_unlocked()
+    key = get_cookie_key(email, base_url)
+    if key in store:
+        del store[key]
+        _save_cookie_store_unlocked(store)
 
 # ─────────────── 邮箱脱敏 ───────────────
 def mask_email(email):
