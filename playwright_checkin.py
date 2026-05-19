@@ -197,7 +197,7 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
     page = await context.new_page()
 
     async def abort_unused(route):
-        if route.request.resource_type in ("image", "font", "media", "stylesheet"):
+            if route.request.resource_type in ("image", "font", "media"):
             await route.abort()
         else:
             await route.continue_()
