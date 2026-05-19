@@ -220,11 +220,10 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
         await page.wait_for_selector('.embed-captcha', timeout=10000)
 
         try:
-            # 极验 V4 如果选择器不匹配，可尝试：
-            # .geetest_btn:not(.geetest_btn_success), .geetest_btn_container, [class*="geetest"][class*="btn"]
-            await page.click('.geetest_btn_click', timeout=5000)
+            btn = await page.wait_for_selector('.geetest_btn:not(.geetest_btn_success):not(.success)', timeout=5000)
+            await human_click_async(page, btn)
             print(f"  ✅ 已点击验证按钮")
-        except:
+        except Exception:
             print(f"  ℹ️ 未找到验证按钮，可能无需点击")
 
         await page.wait_for_function(
