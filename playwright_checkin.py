@@ -219,10 +219,14 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
 
         await page.wait_for_selector('.embed-captcha', timeout=10000)
 
-        try:
-            await page.click('.geetest_btn_click', timeout=5000)
-            print(f"  ✅ 已点击验证按钮")
-        except:
+        geetest_btn = None
+        for selector in ('.geetest_btn:not(.geetest_btn_success)', '.geetest_btn_container', '[class*="geetest"][class*="btn"]'):
+            geetest_btn = await page.query_selector(selector)
+            if geetest_btn:
+                print(f"  🖱️ 点击验证按钮...")
+                await human_click_async(page, geetest_btn)
+                break
+        if not geetest_btn:
             print(f"  ℹ️ 未找到验证按钮，可能无需点击")
 
         await page.wait_for_function(
