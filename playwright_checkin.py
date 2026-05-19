@@ -217,22 +217,23 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
         await page.fill('#email', email)
         await page.fill('#password', password)
 
-        await page.wait_for_selector('.embed-captcha', timeout=10000)
-
-        geetest_btn = None
-        for selector in ('.geetest_btn:not(.geetest_btn_success)', '.geetest_btn_container', '[class*="geetest"][class*="btn"]'):
-            geetest_btn = await page.query_selector(selector)
-            if geetest_btn:
-                print(f"  🖱️ 点击验证按钮...")
-                await human_click_async(page, geetest_btn)
-                break
-        if not geetest_btn:
-            print(f"  ℹ️ 未找到验证按钮，可能无需点击")
-
-        await page.wait_for_function(
-            "() => window.Captcha && window.Captcha.isReady()",
-            timeout=20000
-        )
+        try:
+            await page.wait_for_function(
+                "() => window.Captcha && window.Captcha.isReady()",
+                timeout=3000
+            )
+            print(f"  ✅ 验证码已就绪")
+            geetest_btn = None
+            for selector in ('.geetest_btn:not(.geetest_btn_success)', '.geetest_btn_container', '[class*="geetest"][class*="btn"]'):
+                geetest_btn = await page.query_selector(selector)
+                if geetest_btn:
+                    print(f"  🖱️ 点击验证按钮...")
+                    await human_click_async(page, geetest_btn)
+                    break
+            if not geetest_btn:
+                print(f"  ℹ️ 未找到验证按钮，可能无需点击")
+        except:
+            print(f"  ℹ️ 无验证码或未加载，继续")
 
         login_btn = await page.query_selector('button[type="submit"]')
         if not login_btn:
