@@ -240,15 +240,20 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
             return None, "未找到登录按钮"
 
         print(f"  🖱️ 模拟真人移动并点击登录...")
+        await human_click_async(page, login_btn)
+
         try:
-            async with page.expect_navigation(timeout=15000):
-                await human_click_async(page, login_btn)
+            await page.wait_for_url(
+                lambda url: "/user" in url or "/dashboard" in url or "checkin" in url,
+                timeout=15000,
+            )
             print(f"  ✅ 检测到跳转: {page.url}")
         except PwTimeout:
-            try:
-                await page.wait_for_selector(':has-text("剩余流量"),:has-text("签到")', timeout=5000)
-                print(f"  ⚠️ 未检测到跳转，但页面内容可能已成功: {page.url}")
-            except PwTimeout:
+            current_url = page.url
+            content = await page.content()
+            if "/auth/login" not in current_url or "签到" in content or "剩余流量" in content:
+                print(f"  ⚠️ 未检测到跳转，但页面内容可能已成功: {current_url}")
+            else:
                 return None, "登录后未检测到期望的页面跳转"
 
         pw_cookies = await context.cookies()
