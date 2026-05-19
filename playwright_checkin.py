@@ -217,18 +217,11 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
         await page.fill('#email', email)
         await page.fill('#password', password)
 
-        await page.wait_for_selector('.embed-captcha', timeout=10000)
-
         try:
             await page.click('.geetest_btn_click', timeout=5000)
             print(f"  ✅ 已点击验证按钮")
         except:
             print(f"  ℹ️ 未找到验证按钮，可能无需点击")
-
-        await page.wait_for_function(
-            "() => window.Captcha && window.Captcha.isReady()",
-            timeout=20000
-        )
 
         login_btn = await page.query_selector('button[type="submit"]')
         if not login_btn:
