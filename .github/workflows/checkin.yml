@@ -65,6 +65,13 @@ jobs:
         env:
           ACCOUNTS: ${{ secrets.ACCOUNTS }}
 
+      - name: Delete old cookie cache
+        if: steps.checkin.outputs.cookie_updated == 'true'
+        run: |
+          gh cache delete "${{ runner.os }}-cookies-${{ github.ref_name }}" --repo ${{ github.repository }} || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Save cookie cache (仅 cookie 更新时)
         if: steps.checkin.outputs.cookie_updated == 'true'
         uses: actions/cache/save@v4
