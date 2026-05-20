@@ -5,7 +5,6 @@ import os
 import json
 import time
 import sys
-import random
 import asyncio
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
@@ -163,31 +162,6 @@ _print_lock = Lock()
 def tprint(*args, **kwargs):
     with _print_lock:
         print(*args, **kwargs)
-
-# ─────────────── 模拟真人鼠标移动（async）───────────────
-async def human_click_async(page, element):
-    box = await element.bounding_box()
-    if not box:
-        await element.click()
-        return
-    viewport = page.viewport_size
-    start_x = viewport["width"] * random.uniform(0.3, 0.7)
-    start_y = viewport["height"] * random.uniform(0.3, 0.7)
-    target_x = box["x"] + box["width"] / 2 + random.uniform(-5, 5)
-    target_y = box["y"] + box["height"] / 2 + random.uniform(-5, 5)
-
-    steps = random.randint(18, 35)
-    for i in range(steps):
-        t = i / steps
-        ease = 1 - (1 - t) ** 2
-        curr_x = start_x + (target_x - start_x) * ease
-        curr_y = start_y + (target_y - start_y) * ease
-        await page.mouse.move(curr_x, curr_y)
-        await page.wait_for_timeout(random.randint(8, 18))
-
-    await page.wait_for_timeout(random.randint(80, 250))
-    await page.mouse.click(target_x, target_y)
-
 
 # ─────────────── Playwright 登录（context 级别，async）───────────────
 async def login_in_context_async(context, email, password, base_url, timeout_ms=60000):
