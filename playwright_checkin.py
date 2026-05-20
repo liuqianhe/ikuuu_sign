@@ -220,10 +220,8 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
         await page.wait_for_selector('.embed-captcha', timeout=10000)
 
         try:
-            button = await page.wait_for_selector('div:has-text("Click to verify")', timeout=5000)
-            if button:
-                await human_click_async(page, button)
-                print(f"  ✅ 已点击验证按钮")
+            await page.click('.geetest_btn_click', timeout=5000)
+            print(f"  ✅ 已点击验证按钮")
         except Exception:
             print(f"  ℹ️ 未找到验证按钮，可能无需点击")
 
@@ -237,7 +235,7 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
             return None, "未找到登录按钮"
 
         print(f"  🖱️ 模拟真人移动并点击登录...")
-        await human_click_async(page, login_btn)
+        await page.click('button[type="submit"]')
 
         try:
             await page.wait_for_url(
