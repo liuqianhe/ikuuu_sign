@@ -220,7 +220,7 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
         await page.wait_for_selector('.embed-captcha', timeout=10000)
 
         try:
-            button = await page.wait_for_selector('div:has-text("点我开始验证")', timeout=5000)
+            button = await page.wait_for_selector('div:has-text("Click to verify")', timeout=5000)
             if button:
                 await human_click_async(page, button)
                 print(f"  ✅ 已点击验证按钮")
