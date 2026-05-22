@@ -50,42 +50,45 @@ def _save_cookie_store_unlocked(store):
         tprint(f"  ⚠️ 保存cookie失败: {e}")
 
 def save_session_cookie(email, base_url, pw_cookies):
-    store = _load_cookie_store_unlocked()
-    key = get_cookie_key(email, base_url)
-    cookie_dict = {}
-    for c in pw_cookies:
-        if c.get("sameSite") == "None":
-            c["sameSite"] = "none"
-        name = c.get("name")
-        value = c.get("value")
-        if name and value is not None:
-            cookie_dict[name] = value
-    store[key] = {
-        "email": email,
-        "base_url": base_url,
-        "saved_at": int(time.time()),
-        "cookies": cookie_dict,
-        "source": "playwright",
-    }
-    _save_cookie_store_unlocked(store)
+    with _cookie_lock:
+        store = _load_cookie_store_unlocked()
+        key = get_cookie_key(email, base_url)
+        cookie_dict = {}
+        for c in pw_cookies:
+            if c.get("sameSite") == "None":
+                c["sameSite"] = "none"
+            name = c.get("name")
+            value = c.get("value")
+            if name and value is not None:
+                cookie_dict[name] = value
+        store[key] = {
+            "email": email,
+            "base_url": base_url,
+            "saved_at": int(time.time()),
+            "cookies": cookie_dict,
+            "source": "playwright",
+        }
+        _save_cookie_store_unlocked(store)
 
 def load_session_cookie(email, base_url):
-    store = _load_cookie_store_unlocked()
-    key = get_cookie_key(email, base_url)
-    item = store.get(key)
-    if not item:
-        return None
-    cookies = item.get("cookies")
-    if not isinstance(cookies, dict) or not cookies:
-        return None
-    return cookies
+    with _cookie_lock:
+        store = _load_cookie_store_unlocked()
+        key = get_cookie_key(email, base_url)
+        item = store.get(key)
+        if not item:
+            return None
+        cookies = item.get("cookies")
+        if not isinstance(cookies, dict) or not cookies:
+            return None
+        return cookies
 
 def clear_session_cookie(email, base_url):
-    store = _load_cookie_store_unlocked()
-    key = get_cookie_key(email, base_url)
-    if key in store:
-        del store[key]
-        _save_cookie_store_unlocked(store)
+    with _cookie_lock:
+        store = _load_cookie_store_unlocked()
+        key = get_cookie_key(email, base_url)
+        if key in store:
+            del store[key]
+            _save_cookie_store_unlocked(store)
 
 # ─────────────── 邮箱脱敏 ───────────────
 def mask_email(email):
@@ -158,6 +161,7 @@ def do_checkin(session, base_url):
 
 # ─────────────── 线程安全打印 ───────────────
 _print_lock = Lock()
+_cookie_lock = Lock()
 
 def tprint(*args, **kwargs):
     with _print_lock:
@@ -322,7 +326,7 @@ async def async_main():
         sys.exit(1)
 
     results = []
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     # ── 第一轮：并行试 cookie（在线程池中执行 sync 代码）──
     checkin_tasks = []
