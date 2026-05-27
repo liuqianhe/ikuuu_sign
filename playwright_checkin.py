@@ -94,10 +94,6 @@ def get_accounts():
     print(f"📋 找到 {len(accounts)} 个账户")
     return accounts
 
-# ─────────────── Cookie 工具 ───────────────
-def set_cookie_header(session, cookie_str):
-    session.headers["Cookie"] = cookie_str
-
 # ─────────────── 验证 Cookie ───────────────
 def validate_cookie(session, base_url):
     """返回: True=有效, False=过期, None=网络异常（保留cookie）"""
@@ -115,7 +111,8 @@ def validate_cookie(session, base_url):
         if "var originBody" in resp.text or "剩余流量" in resp.text:
             return True
         return False
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        tprint(f"  ⚠️ 请求异常: {e}")
         return None
 
 # ─────────────── 签到 ───────────────
@@ -213,11 +210,12 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
             else:
                 return None, "登录后未检测到期望的页面跳转"
 
-        cookie_str = await page.evaluate("document.cookie")
-        if not cookie_str:
+        pw_cookies = await context.cookies()
+        if not pw_cookies:
             return None, "未获取到 Cookie"
 
-        print(f"  🍪 获取到 Cookie: {cookie_str[:60]}...")
+        cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in pw_cookies if c.get("name"))
+        print(f"  🍪 获取到 {len(pw_cookies)} 个 Cookie")
         return cookie_str, None
 
     except PwTimeout as e:
@@ -267,7 +265,7 @@ def cookie_checkin(email, password):
         if not cached:
             continue
         sess = requests.session()
-        set_cookie_header(sess, cached)
+        sess.headers["Cookie"] = cached
         status = validate_cookie(sess, base_url)
         if status is None:
             tprint(f"  ⚠️ {mask_email(email)} [{domain}] 网络异常，保留 cookie 下次再试")
@@ -380,7 +378,7 @@ async def async_main():
 
             if base_url:
                 sess = requests.session()
-                set_cookie_header(sess, cookie_str)
+                sess.headers["Cookie"] = cookie_str
                 ok_s, msg = do_checkin(sess, base_url)
 
                 if ok_s:
