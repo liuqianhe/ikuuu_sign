@@ -49,38 +49,18 @@ def _save_cookie_store_unlocked(store):
     except Exception as e:
         tprint(f"  ⚠️ 保存cookie失败: {e}")
 
-def save_session_cookie(email, base_url, pw_cookies):
+def save_session_cookie(email, base_url, cookie_str):
     with _cookie_lock:
         store = _load_cookie_store_unlocked()
         key = get_cookie_key(email, base_url)
-        cookie_dict = {}
-        for c in pw_cookies:
-            if c.get("sameSite") == "None":
-                c["sameSite"] = "none"
-            name = c.get("name")
-            value = c.get("value")
-            if name and value is not None:
-                cookie_dict[name] = value
-        store[key] = {
-            "email": email,
-            "base_url": base_url,
-            "saved_at": int(time.time()),
-            "cookies": cookie_dict,
-            "source": "playwright",
-        }
+        store[key] = cookie_str
         _save_cookie_store_unlocked(store)
 
 def load_session_cookie(email, base_url):
     with _cookie_lock:
         store = _load_cookie_store_unlocked()
         key = get_cookie_key(email, base_url)
-        item = store.get(key)
-        if not item:
-            return None
-        cookies = item.get("cookies")
-        if not isinstance(cookies, dict) or not cookies:
-            return None
-        return cookies
+        return store.get(key)
 
 def clear_session_cookie(email, base_url):
     with _cookie_lock:
@@ -113,6 +93,10 @@ def get_accounts():
         return None
     print(f"📋 找到 {len(accounts)} 个账户")
     return accounts
+
+# ─────────────── Cookie 工具 ───────────────
+def set_cookie_header(session, cookie_str):
+    session.headers["Cookie"] = cookie_str
 
 # ─────────────── 验证 Cookie ───────────────
 def validate_cookie(session, base_url):
@@ -229,12 +213,12 @@ async def login_in_context_async(context, email, password, base_url, timeout_ms=
             else:
                 return None, "登录后未检测到期望的页面跳转"
 
-        pw_cookies = await context.cookies()
-        if not pw_cookies:
+        cookie_str = await page.evaluate("document.cookie")
+        if not cookie_str:
             return None, "未获取到 Cookie"
 
-        print(f"  🍪 获取到 {len(pw_cookies)} 个 Cookie 条目")
-        return pw_cookies, None
+        print(f"  🍪 获取到 Cookie: {cookie_str[:60]}...")
+        return cookie_str, None
 
     except PwTimeout as e:
         return None, f"操作超时: {e}"
@@ -283,7 +267,7 @@ def cookie_checkin(email, password):
         if not cached:
             continue
         sess = requests.session()
-        sess.cookies = requests.utils.cookiejar_from_dict(cached)
+        set_cookie_header(sess, cached)
         status = validate_cookie(sess, base_url)
         if status is None:
             tprint(f"  ⚠️ {mask_email(email)} [{domain}] 网络异常，保留 cookie 下次再试")
@@ -385,23 +369,22 @@ async def async_main():
             await browser.close()
 
         # 处理所有登录结果
-        for (idx, email, pwd), (ret_email, pw_cookies, err, domain) in zip(need_login, login_results):
+        for (idx, email, pwd), (ret_email, cookie_str, err, domain) in zip(need_login, login_results):
             masked = mask_email(email)
             base_url = f"https://{domain}" if domain else None
 
-            if err or not pw_cookies:
+            if err or not cookie_str:
                 print(f"  ❌ {masked} 登录失败: {err}")
                 results.append({"email": masked, "success": False, "message": f"登录失败: {err}", "domain": domain or "all"})
                 continue
 
             if base_url:
-                cookie_dict = {c["name"]: c["value"] for c in pw_cookies if c.get("name") and c.get("value") is not None}
                 sess = requests.session()
-                sess.cookies = requests.utils.cookiejar_from_dict(cookie_dict)
+                set_cookie_header(sess, cookie_str)
                 ok_s, msg = do_checkin(sess, base_url)
 
                 if ok_s:
-                    save_session_cookie(email, base_url, pw_cookies)
+                    save_session_cookie(email, base_url, cookie_str)
                     with open("cookie_updated.flag", "w") as f:
                         f.write("1")
                     print(f"  💾 {masked} Cookie 已保存 ({domain})")
